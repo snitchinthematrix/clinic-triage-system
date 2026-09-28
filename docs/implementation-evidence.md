@@ -3,41 +3,48 @@
 This document records what was built for the v1 clinic appointment +
 patient triage system, the tests that verify each piece, and the manual
 deviations made from the original plan (`docs/plan.md`) along with why.
-It is generated from the actual commit history and test runs on branch
-`clinic-triage-implementation`, executed inline task-by-task per
-`docs/plan.md` under the `superpowers:executing-plans` workflow. The full
-decision log — including every deviation ruling with its rationale — lives
-in `.superpowers/sdd/plan/progress.md`.
+It is generated from the actual commit history and test runs across two
+branches: `clinic-triage-implementation` (the original 20-task build plus
+the Critical-severity fix pass, now merged to `main`) and
+`important-findings-fixes` (the follow-up session fixing all 12
+Important-severity findings from the review). Both were executed under
+the `superpowers:executing-plans` workflow. The full decision log —
+including every deviation ruling with its rationale — lives in
+`.superpowers/sdd/plan/progress.md` inside the relevant worktree.
 
 ## How to verify this yourself
 
 ```bash
-npm run test -w apps/web         # 22 test files, 29 tests
-npm run test -w apps/ai-backend  # 7 test files, 21 tests
-npm run test                     # both, sequentially (50 tests total)
+npm run test -w apps/web         # 23 test files, 35 tests
+npm run test -w apps/ai-backend  # 8 test files, 26 tests
+npm run test                     # both, sequentially (61 tests total)
 npm run build -w apps/web        # production build (must succeed for Vercel)
 
 # requires Docker running:
 npx supabase start               # local Postgres + Supabase stack
 npx supabase db reset            # (re)applies all migrations from scratch
-npx supabase test db             # runs supabase/tests/rls.test.sql (7 pgTAP assertions)
+npx supabase test db             # runs supabase/tests/rls.test.sql (14 pgTAP assertions)
 npx supabase stop                # when done
 ```
 
-All 50 tests pass and the production build succeeds as of the final commit
-of this session. Every test in this document was watched to fail first
-(RED), then made to pass (GREEN) — no test was written after its
-implementation. The task-by-task section below (Milestones 1–6) reflects
-the original 20-task implementation pass; the **Code review & fix pass**
-section below it documents a subsequent fresh-context review and the fixes
-that followed, which is where the test/commit counts above come from.
+All 61 tests pass, the production build succeeds, and all 14 pgTAP
+assertions pass against live Postgres, as of the final commit of this
+session. Every test in this document was watched to fail first (RED),
+then made to pass (GREEN) — no test was written after its implementation.
+The task-by-task section below (Milestones 1–6) reflects the original
+20-task implementation pass; the **Code review & fix pass** section below
+it documents the Critical-severity fixes from a fresh-context review; the
+**Important findings** table further below documents the follow-up pass
+fixing all 12 Important-severity findings.
 
-**Now verified:** the Postgres/RLS layer, once Docker became available
-partway through this session — `npx supabase start`, `npx supabase db
-reset`, and `npx supabase test db` all ran, and the full 7-assertion
-pgTAP suite passes against live Postgres. Running it for real caught a
-genuine RLS recursion bug that manual review alone had missed — see
-"Known limitations" item 1 below for the fix.
+**The Postgres/RLS layer is verified against live Postgres**, not just
+manual SQL review — this was true for the original 3 migrations and holds
+for the 4th migration added in the Important-findings pass too. Running it
+for real caught two genuine bugs manual review had missed: an RLS
+recursion bug in the Critical fix pass (see "Known limitations" item 1),
+and — this pass — nothing new, but the same reset→run→read-the-failure
+discipline was used throughout, which is why I5/I6/I7/I8 each shipped with
+real pgTAP coverage rather than being asserted correct by inspection alone.
 
 ---
 
@@ -326,30 +333,38 @@ designing and building that UI — new-feature work, not a bug fix — and is
 the single biggest remaining item before the plan's own "Final
 Verification" golden path can be walked end-to-end.
 
-### Important findings — not fixed in this session
+### Important findings — all 12 fixed (branch `important-findings-fixes`)
 
-The reviewer found 12 Important-severity issues. Fixing all of them with
-full TDD alongside the 8 Criticals was not feasible in this session; they
-are listed here so nothing is silently dropped. Several are genuine
-correctness or security gaps, not polish:
+The reviewer found 12 Important-severity issues. All were fixed in a
+follow-up session, each with its own RED→GREEN test, verified against a
+live Postgres instance where relevant (pgTAP suite grew from 7 to 14
+assertions, all passing).
 
-- **I2** — `/triage`'s response passes `result.urgency` through unvalidated; a malformed or differently-cased Gemini response (e.g. `"Emergency"` instead of `"emergency"`) skips the emergency banner entirely.
-- **I3** — Express 4's async route handlers don't catch thrown errors (`throw err` in `triage.ts`/`summarize.ts` becomes an unhandled rejection, hanging the request) — e.g. a non-JSON 200 from Gemini.
-- **I5** — the `unique (doctor_id, scheduled_at)` constraint counts `cancelled`/`no_show` rows, so a cancelled slot can never be rebooked by anyone.
-- **I6** — patients can UPDATE their own `appointments.urgency_level` to `'emergency'` to jump the queue, or change `status`/`doctor_id`, because `appointments_patient`/`triage_patient` are `for all` with no column restriction.
-- **I7** — `patients_doctor_read` lets every doctor read every patient's record, not just their own patients'.
-- **I8** — patients can read raw clinical notes (`doctor_raw_notes`) directly via `visit_notes_patient_read`; the migration's comment claiming column-level enforcement "in the API layer" describes a layer that doesn't exist.
-- **I9** — `VisitNoteEditor` loses the doctor's raw notes entirely if the AI summarization call fails, since `saveVisitNote` only runs after a successful `summarizeNotes`.
-- **I10** — `NoShowDashboard`'s past-no-show-count query (`.select('id, count', ...)`) is broken — PostgREST treats the bare `count` as a column name, so the count is always 0.
-- **I11** — `DailyQueue` shows every appointment ever booked with a doctor, including cancelled/done ones, not just the current day.
-- **I1, I4, I12** — the `unknown`-urgency disclaimer never reaches the patient; the emergency-bypass test asserts against text no component renders (vacuous at the page level); and the pgTAP tests lack positive-control assertions and any coverage of the C1 escalation.
+| # | Finding | Fix | Commit |
+|---|---|---|---|
+| I1 | `/triage`'s `unknown`-urgency disclaimer (and the department for any result) never reached the patient — `TriageForm` called `onComplete` immediately, skipping the text entirely. | Added a review step: after a non-emergency result, `TriageForm` shows the disclaimer/department and requires a "Continue to booking" click before calling `onComplete`. | `4d7bb72` |
+| I2 | `/triage`'s response passed `result.urgency` through unvalidated — a malformed or differently-cased Gemini response (e.g. `"Emergency"`) would have skipped the emergency banner entirely. | Validate `urgency` against the exact enum server-side; anything else falls back to the same safe `unknown` response used for Gemini outages. | `6b63c27` |
+| I3 | Express 4 doesn't catch a rejected promise thrown from an async route handler — it becomes an unhandled rejection and the request just hangs (e.g. a non-JSON 200 from Gemini). | Added `asyncHandler` wrapping every route handler (forwards to `next(err)`), a JSON error-handling middleware, and wrapped `response.json()` in `client.ts` so a malformed Gemini body raises `GeminiUnavailableError` instead of an uncaught `SyntaxError`. | `6b63c27` |
+| I4 | The emergency-bypass test asserted against `/book appointment/i`, text no component ever renders — vacuous at the page level; `PatientBookingPage` had no test for `emergency` or `unknown` urgency at all. | Added `PatientBookingPage` tests asserting the emergency alert shows, `bookAppointment` is never called, and the `unknown` fallback disclaimer renders without silently proceeding to booking. | `4d7bb72` |
+| I5 | The `unique (doctor_id, scheduled_at)` constraint counted `cancelled`/`no_show` rows, so a cancelled slot could never be rebooked by anyone. | Replaced with a partial unique index (`where status not in ('cancelled', 'no_show')`). | `c7a2a2c` |
+| I6 | `appointments_patient`/`triage_patient` were `for all` with no column restriction — a patient could UPDATE their own `urgency_level` to `'emergency'` to jump the queue, or change `status`/`doctor_id`. | Split `triage_patient` into select/insert only (no update/delete), with an ownership check on insert. Added a `BEFORE UPDATE` trigger on `appointments` that blocks patients from changing `doctor_id`/`patient_id`/`urgency_level`/`source`, or `status` to anything but `'cancelled'` — while still allowing reschedule (`scheduled_at`). | `c7a2a2c` |
+| I7 | `patients_doctor_read` let every doctor read every patient's record (DOB, insurance info), not just their own patients'. | Scoped the policy to patients the doctor has an actual appointment with. | `c7a2a2c` |
+| I8 | `visit_notes_patient_read` exposed the full row — including `doctor_raw_notes`, the doctor's internal clinical shorthand — to any direct API call from a patient; the migration's own comment claiming column-level enforcement "in the API layer" described a layer that didn't exist. | Since patient and doctor share the same Postgres role, column-level GRANTs can't distinguish them — dropped patient access to the base table entirely and added a `security definer` function `get_my_visit_summaries()` returning only `ai_patient_summary`, which `VisitHistory` now calls instead of querying `visit_notes` directly. | `c7a2a2c` |
+| I9 | `VisitNoteEditor` lost the doctor's raw notes entirely if AI summarization failed, since `saveVisitNote` only ran after a successful `summarizeNotes`. | Raw notes now save regardless of AI outcome; on summarization failure the doctor sees "Notes saved. AI summary is currently unavailable." | `cbf941b` |
+| I10 | `NoShowDashboard`'s past-no-show-count query (`.select('id, count', ...)`) was broken — PostgREST treats a bare `count` as a column name, so the count was always 0. Lead time was also computed from the dashboard's viewed date instead of the booking date, making that risk factor always ≈0. | Fixed to `.select('*', { count: 'exact', head: true })`; extracted `computeLeadTimeDays(createdAt, scheduledAt)` and used it instead. | `804e9db` |
+| I11 | `DailyQueue` showed every appointment ever booked with a doctor, including cancelled/done ones from any date. | Scoped the query to the given day (`gte`/`lte` on `scheduled_at`) and active statuses (`booked`, `checked_in`, `in_progress`). | `6fe7288` |
+| I12 | The pgTAP suite lacked positive-control assertions, any coverage of the C1 privilege-escalation fix, and a `triage_submissions` isolation case; `seed.sql` was also being picked up by `pg_prove`'s glob as its own top-level test. | Fixed in the prior Docker session (commit `19ff41a`): renamed to `seed.pgsql`, added positive controls and a C1 regression test. Further extended in this pass with I5/I6/I7/I8 coverage. | `19ff41a`, `dae7068` |
 
-The complete list with file:line detail was delivered to the session as
-the review agent's report and is preserved in
-`.superpowers/sdd/plan/progress.md`. Several Minor findings (prompt
-injection via unescaped user text in Gemini prompts, `render.yaml`'s
-expected root-level location, no SPA rewrite rule in `vercel.json`, UTC vs.
-clinic-local day boundaries) were also deferred.
+Fixing I8 also surfaced a genuine RLS bug the same way the C3 fix did
+previously: none this time, but the same live-Postgres verification
+approach (reset → run pgTAP → read the actual failure) was used throughout
+this pass rather than relying on manual SQL review alone.
+
+Several Minor findings from the review (prompt injection via unescaped
+user text in Gemini prompts, `render.yaml`'s expected root-level location,
+no SPA rewrite rule in `vercel.json`, UTC vs. clinic-local day boundaries)
+remain deferred — they were graded Minor by the reviewer and not revisited
+in this pass.
 
 ---
 
@@ -357,19 +372,24 @@ clinic-local day boundaries) were also deferred.
 
 ```
 > npm run test -w apps/web
- Test Files  22 passed (22)
-      Tests  29 passed (29)
+ Test Files  23 passed (23)
+      Tests  35 passed (35)
 
 > npm run test -w apps/ai-backend
- Test Files  7 passed (7)
-      Tests  21 passed (21)
+ Test Files  8 passed (8)
+      Tests  26 passed (26)
 
 > npm run build -w apps/web
 ✓ built in <1s
+
+> npx supabase db reset && npx supabase test db
+Files=1, Tests=14
+Result: PASS
 ```
 
-50 tests total, 0 failures, across 29 test files. Production build
-succeeds.
+61 app tests total (35 web + 26 ai-backend), 0 failures, across 31 test
+files, plus all 14 pgTAP RLS assertions passing against live Postgres.
+Production build succeeds.
 
 ## Known limitations
 
@@ -389,11 +409,18 @@ succeeds.
    positive-control assertions (a user reading their *own* allowed row, not
    just being blocked from someone else's), a `triage_submissions`
    isolation case, and a regression test for the C1 privilege-escalation
-   fix. **All 7 pgTAP assertions now pass against live Postgres** (commit
-   `19ff41a`). `seed.sql` was also renamed to `seed.pgsql` — it was being
-   picked up by `pg_prove`'s `*.sql` glob as its own top-level test,
-   committing its fixtures outside a transaction and colliding with itself
-   on every subsequent run.
+   fix (commit `19ff41a`). `seed.sql` was also renamed to `seed.pgsql` — it
+   was being picked up by `pg_prove`'s `*.sql` glob as its own top-level
+   test, committing its fixtures outside a transaction and colliding with
+   itself on every subsequent run. A follow-up pass (branch
+   `important-findings-fixes`) added migration `0004_important_findings.sql`
+   (I5/I6/I7/I8) and grew the suite to cover it: cancelling and rebooking a
+   slot, a patient blocked from escalating their own appointment urgency
+   but still able to reschedule, a doctor scoped to only their own
+   patients, and a patient blocked from `visit_notes` entirely with
+   `get_my_visit_summaries()` verified as the only path to their summary.
+   **All 14 pgTAP assertions now pass against live Postgres** (commit
+   `dae7068`).
 2. **No integration test against a real Gemini or Resend API call** — all
    AI backend tests mock `fetch`/`callGemini`/`sendEmail`. This is
    consistent with the plan (real API calls in unit tests would be flaky
