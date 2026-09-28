@@ -14,10 +14,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.session?.user) await loadRole(data.session.user.id)
       setLoading(false)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) await loadRole(session.user.id)
-      else setRole(null)
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      // Never call another Supabase method synchronously inside this
+      // callback — supabase-js can deadlock waiting on its own internal
+      // auth lock. Deferring with setTimeout(0) breaks out of the
+      // callback's call stack before making the next request.
+      setTimeout(() => {
+        setUser(session?.user ?? null)
+        if (session?.user) {
+          setLoading(true)
+          loadRole(session.user.id).finally(() => setLoading(false))
+        } else {
+          setRole(null)
+          setLoading(false)
+        }
+      }, 0)
     })
     return () => sub.subscription.unsubscribe()
   }, [])
