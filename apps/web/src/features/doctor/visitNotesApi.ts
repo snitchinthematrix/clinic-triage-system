@@ -18,7 +18,7 @@ export async function summarizeNotes(rawNotes: string) {
 
 export async function saveVisitNote(
   appointmentId: string,
-  data: { doctorRawNotes: string; aiClinicalSummary: string; aiPatientSummary: string }
+  data: { doctorRawNotes: string; aiClinicalSummary: string | null; aiPatientSummary: string | null }
 ): Promise<{ ok: boolean }> {
   const { error } = await supabase.from('visit_notes').upsert({
     appointment_id: appointmentId,
