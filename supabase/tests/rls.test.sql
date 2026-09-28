@@ -1,14 +1,16 @@
 -- supabase/tests/rls.test.sql
 -- pgTAP regression tests for the RLS policies in 0002_rls_policies.sql,
--- 0003_auth_provisioning_and_read_policies.sql, and
--- 0004_important_findings.sql. Covers the plan's Review Focus items,
--- positive controls, the C1 privilege-escalation fix, and the I5/I6/I7/I8
--- fixes from the post-implementation code review.
+-- 0003_auth_provisioning_and_read_policies.sql, 0004_important_findings.sql,
+-- and 0005_minor_findings.sql. Covers the plan's Review Focus items,
+-- positive controls, the C1 privilege-escalation fix, the I5/I6/I7/I8
+-- fixes, and the Minor findings (doctor column restriction, front_desk
+-- profile editing without role escalation, atomic booking RPC) from the
+-- post-implementation code review.
 
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(14);
+select plan(20);
 
 -- Fixtures: two patients, one doctor, one front_desk user, two appointments,
 -- and one visit_note. Loaded as the superuser/owner role, which bypasses RLS.
@@ -142,6 +144,22 @@ select is_empty(
   'doctor A cannot read a patient they have never seen (I7)'
 );
 
+-- 6b. Minor: a doctor cannot reassign their own appointment to a
+-- different patient, but CAN update its status (progressing the queue).
+select throws_ok(
+  $$ update appointments set patient_id = '66666666-6666-6666-6666-666666666666'
+     where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' $$,
+  'P0001',
+  null,
+  'a doctor cannot reassign their own appointment to a different patient'
+);
+
+select lives_ok(
+  $$ update appointments set status = 'checked_in'
+     where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' $$,
+  'a doctor can still update their own appointment status'
+);
+
 -- 7. I8: a patient can no longer read visit_notes directly at all (the
 -- patient-read policy was dropped), only through get_my_visit_summaries(),
 -- which returns only the AI patient summary, never doctor_raw_notes.
@@ -156,6 +174,51 @@ select isnt_empty(
   $$ select * from get_my_visit_summaries()
      where ai_patient_summary = 'You have a mild headache. Rest and stay hydrated.' $$,
   'a patient can read their own AI summary via get_my_visit_summaries() (I8)'
+);
+
+-- 8. Minor: front_desk can edit a patient's profile (name/phone), but
+-- cannot use that same access to change the profile's role.
+select set_config('request.jwt.claim.sub', '44444444-4444-4444-4444-444444444444', true);
+
+select lives_ok(
+  $$ update profiles set full_name = 'Patient A (updated)'
+     where id = '11111111-1111-1111-1111-111111111111' $$,
+  'front_desk can edit a patient profile (minor: profile editing)'
+);
+
+select throws_ok(
+  $$ update profiles set role = 'doctor'
+     where id = '11111111-1111-1111-1111-111111111111' $$,
+  'P0001',
+  null,
+  'front_desk cannot use profile-edit access to escalate a role'
+);
+
+-- 9. Minor: book_appointment_with_triage() creates the appointment and
+-- its triage_submissions row atomically in one call.
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
+
+select book_appointment_with_triage(
+  '33333333-3333-3333-3333-333333333333',
+  '11111111-1111-1111-1111-111111111111',
+  '2026-10-03 09:00+00',
+  'self_booked',
+  'soon',
+  'new symptom via RPC',
+  'General Practice',
+  '{"urgency":"soon"}'::jsonb
+);
+
+select isnt_empty(
+  $$ select * from appointments
+     where doctor_id = '33333333-3333-3333-3333-333333333333'
+       and scheduled_at = '2026-10-03 09:00+00' $$,
+  'book_appointment_with_triage creates the appointment'
+);
+
+select isnt_empty(
+  $$ select * from triage_submissions where symptom_text = 'new symptom via RPC' $$,
+  'book_appointment_with_triage creates the matching triage_submissions row atomically'
 );
 
 select * from finish();

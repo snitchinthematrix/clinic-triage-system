@@ -14,17 +14,21 @@ export async function bookAppointment(input: {
   const urgency =
     input.triageResult && input.triageResult.urgency !== 'unknown' ? input.triageResult.urgency : null
 
-  const { data, error } = await supabase
-    .from('appointments')
-    .insert({
-      doctor_id: input.doctorId,
-      patient_id: input.patientId,
-      scheduled_at: input.scheduledAt,
-      source: 'self_booked',
-      urgency_level: urgency,
-    })
-    .select('id')
-    .single()
+  // The appointment insert and the triage_submissions insert happen inside
+  // a single Postgres function (book_appointment_with_triage) so they
+  // commit or fail together — previously these were two separate client
+  // round-trips, and a failure on the second one silently left an
+  // appointment with no triage record and no error surfaced to the caller.
+  const { data, error } = await supabase.rpc('book_appointment_with_triage', {
+    p_doctor_id: input.doctorId,
+    p_patient_id: input.patientId,
+    p_scheduled_at: input.scheduledAt,
+    p_source: 'self_booked',
+    p_urgency_level: urgency,
+    p_symptom_text: input.triageResult?.symptomText ?? null,
+    p_suggested_department: input.triageResult?.suggestedDepartment ?? null,
+    p_raw_response: input.triageResult ?? null,
+  })
 
   if (error) {
     // Postgres unique_violation code from the (doctor_id, scheduled_at) constraint
@@ -32,18 +36,7 @@ export async function bookAppointment(input: {
     return { ok: false, error: 'unknown' }
   }
 
-  if (input.triageResult) {
-    await supabase.from('triage_submissions').insert({
-      patient_id: input.patientId,
-      appointment_id: data.id,
-      symptom_text: input.triageResult.symptomText,
-      ai_urgency: urgency,
-      ai_suggested_department: input.triageResult.suggestedDepartment,
-      ai_raw_response: input.triageResult,
-    })
-  }
-
-  return { ok: true, appointmentId: data.id }
+  return { ok: true, appointmentId: data }
 }
 
 export async function rescheduleAppointment(id: string, newTime: string): Promise<BookResult> {
