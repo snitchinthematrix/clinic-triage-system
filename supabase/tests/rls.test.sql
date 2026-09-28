@@ -1,15 +1,14 @@
 -- supabase/tests/rls.test.sql
--- pgTAP regression tests for the RLS policies in 0002_rls_policies.sql and
--- 0003_auth_provisioning_and_read_policies.sql. Covers the plan's Review
--- Focus items plus positive controls and the C1 privilege-escalation fix
--- (added after a fresh-context code review found the negative-only
--- assertions below would pass even if RLS denied authenticated users
--- everything, not just the specific rows under test).
+-- pgTAP regression tests for the RLS policies in 0002_rls_policies.sql,
+-- 0003_auth_provisioning_and_read_policies.sql, and
+-- 0004_important_findings.sql. Covers the plan's Review Focus items,
+-- positive controls, the C1 privilege-escalation fix, and the I5/I6/I7/I8
+-- fixes from the post-implementation code review.
 
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(7);
+select plan(14);
 
 -- Fixtures: two patients, one doctor, one front_desk user, two appointments,
 -- and one visit_note. Loaded as the superuser/owner role, which bypasses RLS.
@@ -89,6 +88,74 @@ select throws_ok(
   '23505',
   null,
   'duplicate doctor+time slot is rejected by the unique constraint'
+);
+
+-- 4. I5: cancelling the appointment frees the slot back up. The unique
+-- index is partial (where status not in ('cancelled', 'no_show')), so once
+-- patient A's appointment is cancelled, a NEW appointment for the same
+-- doctor+time must be insertable, not permanently blocked.
+update appointments set status = 'cancelled' where id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+select lives_ok(
+  $$ insert into appointments (id, patient_id, doctor_id, scheduled_at, source)
+     values ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+             '22222222-2222-2222-2222-222222222222',
+             '33333333-3333-3333-3333-333333333333',
+             '2026-10-01 09:00+00',
+             'front_desk') $$,
+  'a cancelled slot can be rebooked (I5)'
+);
+
+-- 5. I6a: a patient cannot escalate their own appointment's urgency_level
+-- via UPDATE (the restrict_patient_appointment_update trigger blocks it).
+-- Uses patient B's appointment, which test 4 above did not touch.
+select set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', true);
+
+select throws_ok(
+  $$ update appointments set urgency_level = 'emergency'
+     where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' $$,
+  'P0001',
+  null,
+  'a patient cannot set their own appointment urgency_level to emergency (I6)'
+);
+
+-- 5b. I6b: a patient CAN still reschedule (change scheduled_at) — the
+-- trigger only blocks doctor_id/patient_id/urgency_level/source and status
+-- transitions other than to 'cancelled', not scheduled_at.
+select lives_ok(
+  $$ update appointments set scheduled_at = '2026-10-02 10:00+00'
+     where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' $$,
+  'a patient can still reschedule their own appointment (I6)'
+);
+
+-- 6. I7: a doctor can read the record of a patient they have an
+-- appointment with, but not one they've never seen.
+select set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', true);
+
+select isnt_empty(
+  $$ select * from patients where profile_id = '11111111-1111-1111-1111-111111111111' $$,
+  'doctor A can read a patient they have an appointment with (I7)'
+);
+
+select is_empty(
+  $$ select * from patients where profile_id = '66666666-6666-6666-6666-666666666666' $$,
+  'doctor A cannot read a patient they have never seen (I7)'
+);
+
+-- 7. I8: a patient can no longer read visit_notes directly at all (the
+-- patient-read policy was dropped), only through get_my_visit_summaries(),
+-- which returns only the AI patient summary, never doctor_raw_notes.
+select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
+
+select is_empty(
+  $$ select * from visit_notes where appointment_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' $$,
+  'a patient cannot read visit_notes directly at all (I8)'
+);
+
+select isnt_empty(
+  $$ select * from get_my_visit_summaries()
+     where ai_patient_summary = 'You have a mild headache. Rest and stay hydrated.' $$,
+  'a patient can read their own AI summary via get_my_visit_summaries() (I8)'
 );
 
 select * from finish();

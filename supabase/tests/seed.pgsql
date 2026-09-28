@@ -20,12 +20,16 @@ insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'patient-a@example.com'),
   ('22222222-2222-2222-2222-222222222222', 'patient-b@example.com'),
   ('33333333-3333-3333-3333-333333333333', 'doctor-a@example.com'),
-  ('44444444-4444-4444-4444-444444444444', 'frontdesk@example.com');
+  ('44444444-4444-4444-4444-444444444444', 'frontdesk@example.com'),
+  -- Patient C has no appointment with doctor A — used to test that
+  -- patients_doctor_read (I7) is scoped to a doctor's own patients only.
+  ('66666666-6666-6666-6666-666666666666', 'patient-c@example.com');
 
 update public.profiles set full_name = 'Patient A' where id = '11111111-1111-1111-1111-111111111111';
 update public.profiles set full_name = 'Patient B' where id = '22222222-2222-2222-2222-222222222222';
 update public.profiles set role = 'doctor', full_name = 'Doctor A' where id = '33333333-3333-3333-3333-333333333333';
 update public.profiles set role = 'front_desk', full_name = 'Front Desk User' where id = '44444444-4444-4444-4444-444444444444';
+update public.profiles set full_name = 'Patient C' where id = '66666666-6666-6666-6666-666666666666';
 
 delete from public.patients where profile_id in (
   '33333333-3333-3333-3333-333333333333',
@@ -47,8 +51,8 @@ insert into public.appointments (id, patient_id, doctor_id, scheduled_at, source
    '2026-10-02 09:00+00',
    'self_booked');
 
-insert into public.visit_notes (appointment_id, doctor_raw_notes) values
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Patient reports mild headache, no fever.');
+insert into public.visit_notes (appointment_id, doctor_raw_notes, ai_patient_summary) values
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Patient reports mild headache, no fever.', 'You have a mild headache. Rest and stay hydrated.');
 
 insert into public.triage_submissions (id, patient_id, appointment_id, symptom_text) values
   ('cccccccc-cccc-cccc-cccc-cccccccccccc',
