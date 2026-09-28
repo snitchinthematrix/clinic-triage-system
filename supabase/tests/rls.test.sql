@@ -10,7 +10,7 @@
 create extension if not exists pgtap with schema extensions;
 
 begin;
-select plan(20);
+select plan(21);
 
 -- Fixtures: two patients, one doctor, one front_desk user, two appointments,
 -- and one visit_note. Loaded as the superuser/owner role, which bypasses RLS.
@@ -219,6 +219,15 @@ select isnt_empty(
 select isnt_empty(
   $$ select * from triage_submissions where symptom_text = 'new symptom via RPC' $$,
   'book_appointment_with_triage creates the matching triage_submissions row atomically'
+);
+
+-- 10. Minor: front_desk can persist a computed no-show risk score.
+select set_config('request.jwt.claim.sub', '44444444-4444-4444-4444-444444444444', true);
+
+select lives_ok(
+  $$ insert into no_show_scores (appointment_id, risk_score)
+     values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 0.42) $$,
+  'front_desk can persist a no-show risk score'
 );
 
 select * from finish();

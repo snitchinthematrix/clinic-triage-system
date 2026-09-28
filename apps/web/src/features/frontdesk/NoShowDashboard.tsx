@@ -11,6 +11,10 @@ interface RiskRow {
 
 const HIGH_RISK_THRESHOLD = 0.6
 
+async function persistRiskScore(appointmentId: string, risk: number): Promise<void> {
+  await supabase.from('no_show_scores').upsert({ appointment_id: appointmentId, risk_score: risk })
+}
+
 async function fetchPastNoShowCount(patientId: string): Promise<number> {
   // PostgREST treats a bare "count" as a literal column name, not the
   // count aggregate — '*' with the { count: 'exact', head: true } option
@@ -51,6 +55,11 @@ export function NoShowDashboard({ date }: { date: string }) {
               pastNoShowCount,
               source: r.source,
             })
+            // Persist so the score has a historical record beyond this
+            // one render (a report, or a future scheduled job, can read
+            // it back) — previously it was computed and shown but never
+            // written anywhere.
+            await persistRiskScore(r.id, risk)
             return { id: r.id, patientName: r.patients.profiles.full_name, risk }
           })
         )
