@@ -45,3 +45,17 @@ export async function bookAppointment(input: {
 
   return { ok: true, appointmentId: data.id }
 }
+
+export async function rescheduleAppointment(id: string, newTime: string): Promise<BookResult> {
+  const { error } = await supabase.from('appointments').update({ scheduled_at: newTime }).eq('id', id)
+  if (error) {
+    if (error.code === '23505') return { ok: false, error: 'slot_taken' }
+    return { ok: false, error: 'unknown' }
+  }
+  return { ok: true, appointmentId: id }
+}
+
+export async function cancelAppointment(id: string): Promise<{ ok: boolean }> {
+  const { error } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', id)
+  return { ok: !error }
+}
