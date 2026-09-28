@@ -3,48 +3,51 @@
 This document records what was built for the v1 clinic appointment +
 patient triage system, the tests that verify each piece, and the manual
 deviations made from the original plan (`docs/plan.md`) along with why.
-It is generated from the actual commit history and test runs across two
-branches: `clinic-triage-implementation` (the original 20-task build plus
-the Critical-severity fix pass, now merged to `main`) and
-`important-findings-fixes` (the follow-up session fixing all 12
-Important-severity findings from the review). Both were executed under
-the `superpowers:executing-plans` workflow. The full decision log —
+It is generated from the actual commit history and test runs across three
+branches, each merged to `main` in turn: `clinic-triage-implementation`
+(the original 20-task build plus the Critical-severity fix pass),
+`important-findings-fixes` (all 12 Important-severity findings), and
+`minor-findings-fixes` (the Minor findings). All three were executed
+under the `superpowers:executing-plans` workflow. The full decision log —
 including every deviation ruling with its rationale — lives in
 `.superpowers/sdd/plan/progress.md` inside the relevant worktree.
 
 ## How to verify this yourself
 
 ```bash
-npm run test -w apps/web         # 23 test files, 35 tests
-npm run test -w apps/ai-backend  # 8 test files, 26 tests
-npm run test                     # both, sequentially (61 tests total)
+npm run test -w apps/web         # 26 test files, 49 tests
+npm run test -w apps/ai-backend  # 8 test files, 28 tests
+npm run test                     # both, sequentially (77 tests total)
 npm run build -w apps/web        # production build (must succeed for Vercel)
 
 # requires Docker running:
 npx supabase start               # local Postgres + Supabase stack
 npx supabase db reset            # (re)applies all migrations from scratch
-npx supabase test db             # runs supabase/tests/rls.test.sql (14 pgTAP assertions)
+npx supabase test db             # runs supabase/tests/rls.test.sql (21 pgTAP assertions)
 npx supabase stop                # when done
 ```
 
-All 61 tests pass, the production build succeeds, and all 14 pgTAP
+All 77 tests pass, the production build succeeds, and all 21 pgTAP
 assertions pass against live Postgres, as of the final commit of this
 session. Every test in this document was watched to fail first (RED),
 then made to pass (GREEN) — no test was written after its implementation.
 The task-by-task section below (Milestones 1–6) reflects the original
 20-task implementation pass; the **Code review & fix pass** section below
 it documents the Critical-severity fixes from a fresh-context review; the
-**Important findings** table further below documents the follow-up pass
-fixing all 12 Important-severity findings.
+**Important findings** table documents the pass fixing all 12
+Important-severity findings; the **Minor findings** table documents the
+final pass, which also fixed all but two Minor findings (explicitly
+deferred, with reasons, rather than silently dropped).
 
 **The Postgres/RLS layer is verified against live Postgres**, not just
-manual SQL review — this was true for the original 3 migrations and holds
-for the 4th migration added in the Important-findings pass too. Running it
-for real caught two genuine bugs manual review had missed: an RLS
-recursion bug in the Critical fix pass (see "Known limitations" item 1),
-and — this pass — nothing new, but the same reset→run→read-the-failure
-discipline was used throughout, which is why I5/I6/I7/I8 each shipped with
-real pgTAP coverage rather than being asserted correct by inspection alone.
+manual SQL review — true for all 6 migrations now. Running it for real
+caught two genuine bugs manual review had missed: an RLS recursion bug in
+the Critical fix pass, and a second one in the Minor fix pass — a new
+front_desk role-escalation-guard trigger fired unconditionally, including
+during the pgTAP suite's own fixture loading (which runs as a superuser,
+not through the app), breaking every test until scoped to
+`current_role_value() = 'front_desk'` specifically. Both were caught by
+actually running the suite, not by inspection.
 
 ---
 
@@ -360,11 +363,29 @@ previously: none this time, but the same live-Postgres verification
 approach (reset → run pgTAP → read the actual failure) was used throughout
 this pass rather than relying on manual SQL review alone.
 
-Several Minor findings from the review (prompt injection via unescaped
-user text in Gemini prompts, `render.yaml`'s expected root-level location,
-no SPA rewrite rule in `vercel.json`, UTC vs. clinic-local day boundaries)
-remain deferred — they were graded Minor by the reviewer and not revisited
-in this pass.
+### Minor findings — all addressed except two, in a follow-up session (branch `minor-findings-fixes`)
+
+All Minor findings from the review were revisited in a third pass. Every
+DB-level change was verified against live Postgres — the pgTAP suite grew
+from 14 to 21 assertions, all passing.
+
+| Finding | Fix | Commit |
+|---|---|---|
+| `current_role_value()` had no `set search_path`, a Supabase linter warning. | Already fixed as a side effect of making it `security definer` in the Critical fix pass (`0003_auth_provisioning_and_read_policies.sql`). No new work needed. | `9b00cb4` (earlier) |
+| `appointments_doctor_update` let a doctor change `patient_id`/`scheduled_at`/`doctor_id`/`source` on their own rows — reassigning the patient or moving the slot should be a front-desk/patient action. | Generalized the existing patient-only restriction trigger into `restrict_appointment_update()`, covering doctors too: they can still change `status` and `urgency_level`, not the rest. | `fe4abe6` |
+| User-supplied text (patient symptoms, doctor's raw notes) was interpolated directly into Gemini prompts with no delimiting — a prompt-injection surface. | Delimited both with explicit `<patient_input>`/`<doctor_notes>` tags and an instruction telling the model to treat the contents strictly as data, never as instructions. | `5bd8841` |
+| `bookAppointment` did the appointment insert and the triage_submissions insert as two separate client round-trips; a failure on the second silently left an appointment with no triage record. | Moved both into one Postgres function, `book_appointment_with_triage()` — a function body is one transaction, so a failure partway rolls back the whole thing. Also used to add `source` support for front-desk walk-ins (below). | `fe4abe6` |
+| `AuthProvider`'s `onAuthStateChange` callback awaited another Supabase call directly inside it — a documented supabase-js deadlock pitfall — and `loading` went `false` before the role had loaded after sign-in, so `ProtectedRoute` could briefly bounce a freshly-signed-in user to `/login`. | Deferred the callback's Supabase calls with `setTimeout(0)`; `loading` now stays `true` until the role query actually resolves. | `4b0c0ef` |
+| Patient-side reschedule had no UI — `AppointmentActions` only supported cancel, despite `rescheduleAppointment` existing in the API layer since Task 9. | Added a "New time" input and Reschedule button, including the slot-taken error path. | `68eff01` |
+| Front-desk could edit a patient's insurance info but not their name or phone — `profiles` had no update policy for front_desk at all. | Added `profiles_front_desk_update`, guarded by a trigger blocking any change to `role` (so this new access can't be used to self-escalate or escalate a patient's role) — extended `PatientRecordForm` with name/phone fields. | `fe4abe6`, `d0485b7` |
+| Front-desk booking and walk-ins were missing entirely; `MasterCalendar` was read-only. | Added `WalkInBookingForm` (doctor dropdown + live patient name search + time picker) to `FrontDeskHome`, and extended `bookAppointment` to accept `source: 'front_desk'` so walk-ins are attributed correctly. | `17defa2` |
+| `no_show_scores` was select-only for everyone — the risk heuristic was computed client-side in `NoShowDashboard` but never persisted, so there was no historical record. | Added front_desk write policies and an upsert call after each computed score. | `17f408b` |
+| `notify` was never called from anywhere in the app, despite the AI backend having working `/notify/*` endpoints since Task 19. | Wired `sendBookingConfirmation` into `BookingForm`'s successful-booking path (fetches the doctor's name and the patient's own email, best-effort — a failed send never blocks the "booked" confirmation the patient sees). | `5dda6d2` |
+
+**Two Minor findings remain genuinely deferred**, not silently dropped:
+
+1. **UTC vs. clinic-local day boundaries** (`MasterCalendar`/`NoShowDashboard`/`DailyQueue` all use UTC day cutoffs). Fixing this requires a clinic (or per-doctor) timezone to compute local midnight from — no such config exists anywhere in the schema (`doctors.working_hours` is a JSON blob with no timezone field). Adding one is a schema/product decision, not a bug fix with an obvious single answer.
+2. **24-hour reminder emails and the "high-risk nudge" email for `NoShowDashboard`'s flagged patients**. Both need to look up a patient's email from the front-desk/system side — `profiles` has no `email` column (only `auth.users` does, which isn't queryable via the anon key), and reminders additionally need a scheduler (a cron job or Render Cron Job), which is new infrastructure. The `notifications` table also has no INSERT policy for anyone yet, which the same design decision would need to resolve. This is real, scoped follow-up work, not a quick fix.
 
 ---
 
@@ -372,23 +393,23 @@ in this pass.
 
 ```
 > npm run test -w apps/web
- Test Files  23 passed (23)
-      Tests  35 passed (35)
+ Test Files  26 passed (26)
+      Tests  49 passed (49)
 
 > npm run test -w apps/ai-backend
  Test Files  8 passed (8)
-      Tests  26 passed (26)
+      Tests  28 passed (28)
 
 > npm run build -w apps/web
 ✓ built in <1s
 
 > npx supabase db reset && npx supabase test db
-Files=1, Tests=14
+Files=1, Tests=21
 Result: PASS
 ```
 
-61 app tests total (35 web + 26 ai-backend), 0 failures, across 31 test
-files, plus all 14 pgTAP RLS assertions passing against live Postgres.
+77 app tests total (49 web + 28 ai-backend), 0 failures, across 34 test
+files, plus all 21 pgTAP RLS assertions passing against live Postgres.
 Production build succeeds.
 
 ## Known limitations
