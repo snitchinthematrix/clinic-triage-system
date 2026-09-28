@@ -22,11 +22,11 @@
 
 ## Review Focus
 
-- Emergency-classified triage results must short-circuit straight to an emergency banner, never silently continue into the normal booking form — tested in Task 3.1.
-- Front-desk accounts must be blocked by RLS from reading `visit_notes` clinical content even via direct API calls, not just hidden in the UI — tested in Task 1.2.
-- The AI backend must degrade gracefully (return a safe "unable to triage, please call the clinic" response) when the Gemini API call fails or times out, rather than crashing the request or leaving the patient stuck — tested in Task 2.2.
-- Two front-desk/patient actions booking the same doctor+time slot concurrently must be prevented by a database constraint, not just client-side checks — tested in Task 3.2.
-- A patient must be blocked by RLS from reading another patient's appointments or triage submissions, even by guessing an ID — tested in Task 1.2.
+- Emergency-classified triage results must short-circuit straight to an emergency banner, never silently continue into the normal booking form — tested in Task 7.
+- Front-desk accounts must be blocked by RLS from reading `visit_notes` clinical content even via direct API calls, not just hidden in the UI — tested in Task 2.
+- The AI backend must degrade gracefully (return a safe "unable to triage, please call the clinic" response) when the Gemini API call fails or times out, rather than crashing the request or leaving the patient stuck — tested in Task 5.
+- Two front-desk/patient actions booking the same doctor+time slot concurrently must be prevented by a database constraint, not just client-side checks — tested in Task 8.
+- A patient must be blocked by RLS from reading another patient's appointments or triage submissions, even by guessing an ID — tested in Task 2.
 
 ---
 
@@ -34,7 +34,7 @@
 
 Produces: a running (locally) monorepo with a Supabase-backed Postgres schema, RLS policies enforcing the three roles, and a working signup/login flow with role-based route protection. This is the base every later milestone depends on.
 
-### Task 1.1: Monorepo & tooling scaffold
+### Task 1: Monorepo & tooling scaffold
 
 **Files:**
 - Create: `package.json` (root, npm workspaces)
@@ -200,7 +200,7 @@ git add .
 git commit -m "chore: scaffold web app and AI backend workspaces"
 ```
 
-### Task 1.2: Supabase schema, migrations & RLS policies
+### Task 2: Supabase schema, migrations & RLS policies
 
 **Files:**
 - Create: `supabase/migrations/0001_init_schema.sql`
@@ -321,7 +321,7 @@ create policy profiles_self_insert on profiles for insert
   with check (id = auth.uid());
 
 -- patients: patient reads/writes own row; doctors read all; front_desk reads AND writes
--- (front_desk needs write access for patient record management, Milestone 5 Task 5.4)
+-- (front_desk needs write access for patient record management, Milestone 5 Task 18)
 create policy patients_self on patients for all
   using (profile_id = auth.uid())
   with check (profile_id = auth.uid());
@@ -437,7 +437,7 @@ git add supabase apps/web/src/lib/supabaseClient.ts
 git commit -m "feat: add Supabase schema, RLS policies, and typed client"
 ```
 
-### Task 1.3: Auth — signup, login, role-based routing
+### Task 3: Auth — signup, login, role-based routing
 
 **Files:**
 - Create: `apps/web/src/features/auth/AuthProvider.tsx`
@@ -449,7 +449,7 @@ git commit -m "feat: add Supabase schema, RLS policies, and typed client"
 - Test: `apps/web/src/features/auth/ProtectedRoute.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` from `apps/web/src/lib/supabaseClient.ts` (Task 1.2)
+- Consumes: `supabase` from `apps/web/src/lib/supabaseClient.ts` (Task 2)
 - Produces: `useAuth()` hook returning `{ user, role, loading, signIn, signOut }`; `<ProtectedRoute allow={['doctor']}>` component
 
 - [ ] **Step 1: Write failing test for role-gated routing**
@@ -717,7 +717,7 @@ export default function App() {
 }
 ```
 
-Note: `App.test.tsx` from Task 1.1 still passes since `/` still renders text containing "Clinic".
+Note: `App.test.tsx` from Task 1 still passes since `/` still renders text containing "Clinic".
 
 - [ ] **Step 9: Run full web test suite**
 
@@ -737,7 +737,7 @@ git commit -m "feat: add auth provider, login/signup, and role-based routing"
 
 Produces: a deployable Express service with two working, tested endpoints (triage classification, visit-note summarization) backed by Gemini, with the emergency safety rule and graceful-failure behavior in place.
 
-### Task 2.1: Gemini client wrapper
+### Task 4: Gemini client wrapper
 
 **Files:**
 - Create: `apps/ai-backend/src/gemini/client.ts`
@@ -847,7 +847,7 @@ git add apps/ai-backend/src/gemini
 git commit -m "feat: add Gemini client wrapper with graceful failure handling"
 ```
 
-### Task 2.2: Triage endpoint with emergency safety rule
+### Task 5: Triage endpoint with emergency safety rule
 
 **Files:**
 - Create: `apps/ai-backend/src/routes/triage.ts`
@@ -855,7 +855,7 @@ git commit -m "feat: add Gemini client wrapper with graceful failure handling"
 - Test: `apps/ai-backend/src/routes/triage.test.ts`
 
 **Interfaces:**
-- Consumes: `callGemini` from `apps/ai-backend/src/gemini/client.ts` (Task 2.1)
+- Consumes: `callGemini` from `apps/ai-backend/src/gemini/client.ts` (Task 4)
 - Produces: `POST /triage` accepting `{ symptomText: string, durationDays: number, bodyArea: string, severity: number }`, returning `{ urgency: 'routine'|'soon'|'urgent'|'emergency', suggestedDepartment: string, disclaimer: string }` (or a safe fallback on Gemini failure)
 
 - [ ] **Step 1: Write failing tests, including the emergency and failure-fallback cases (Review Focus)**
@@ -993,7 +993,7 @@ git add apps/ai-backend/src/routes/triage.ts apps/ai-backend/src/server.ts
 git commit -m "feat: add /triage endpoint with emergency handling and safe fallback"
 ```
 
-### Task 2.3: Visit-note summarization endpoint
+### Task 6: Visit-note summarization endpoint
 
 **Files:**
 - Create: `apps/ai-backend/src/routes/summarize.ts`
@@ -1001,7 +1001,7 @@ git commit -m "feat: add /triage endpoint with emergency handling and safe fallb
 - Test: `apps/ai-backend/src/routes/summarize.test.ts`
 
 **Interfaces:**
-- Consumes: `callGemini` from `apps/ai-backend/src/gemini/client.ts` (Task 2.1)
+- Consumes: `callGemini` from `apps/ai-backend/src/gemini/client.ts` (Task 4)
 - Produces: `POST /summarize-visit` accepting `{ rawNotes: string }`, returning `{ clinicalSummary: string, patientSummary: string }`
 
 - [ ] **Step 1: Write failing test**
@@ -1110,7 +1110,7 @@ git commit -m "feat: add /summarize-visit endpoint"
 
 Produces: the full patient journey — AI symptom triage (with the emergency bypass wired end-to-end), booking, reschedule/cancel, and visit history with AI summaries.
 
-### Task 3.1: Symptom triage form with emergency bypass
+### Task 7: Symptom triage form with emergency bypass
 
 **Files:**
 - Create: `apps/web/src/features/patient/TriageForm.tsx`
@@ -1118,7 +1118,7 @@ Produces: the full patient journey — AI symptom triage (with the emergency byp
 - Test: `apps/web/src/features/patient/TriageForm.test.tsx`
 
 **Interfaces:**
-- Consumes: `POST /triage` from AI backend (Task 2.2)
+- Consumes: `POST /triage` from AI backend (Task 5)
 - Produces: `submitTriage(input): Promise<TriageResult>` in `aiBackendClient.ts`; `<TriageForm onComplete={(result) => void}>`
 
 - [ ] **Step 1: Write failing test for the emergency short-circuit (Review Focus)**
@@ -1201,7 +1201,7 @@ export async function submitTriage(input: TriageInput): Promise<TriageResult> {
 ```
 
 `symptomText` is echoed back onto the result (rather than only returned by
-the backend) so that Task 3.2's booking flow can persist the original
+the backend) so that Task 8's booking flow can persist the original
 symptom text into `triage_submissions` without a second round-trip.
 
 - [ ] **Step 4: Implement `TriageForm`**
@@ -1287,11 +1287,11 @@ git add apps/web/src/features/patient/TriageForm.tsx apps/web/src/features/patie
 git commit -m "feat: add patient symptom triage form with emergency bypass"
 ```
 
-### Task 3.2: Booking flow with double-booking prevention and triage persistence
+### Task 8: Booking flow with double-booking prevention and triage persistence
 
-This task also closes a gap between Milestone 3 and Milestone 4: Task 3.1's
+This task also closes a gap between Milestone 3 and Milestone 4: Task 7's
 `TriageForm` computes an AI urgency/department but nothing before this task
-ever saves it, yet Task 4.1 (doctor queue, sorted by urgency) and Task 4.2
+ever saves it, yet Task 11 (doctor queue, sorted by urgency) and Task 12
 (patient chart, showing latest reported symptoms) both read
 `appointments.urgency_level` and `triage_submissions` as if they were
 already populated. This task makes `bookAppointment` respons ible for
@@ -1307,7 +1307,7 @@ actually flows end to end.
 - Test: `apps/web/src/features/patient/PatientBookingPage.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client (Task 1.2), `appointments` table `unique (doctor_id, scheduled_at)` constraint (Task 1.2), `TriageForm` and `TriageResult` from `apps/web/src/features/patient/TriageForm.tsx` / `aiBackendClient.ts` (Task 3.1)
+- Consumes: `supabase` client (Task 2), `appointments` table `unique (doctor_id, scheduled_at)` constraint (Task 2), `TriageForm` and `TriageResult` from `apps/web/src/features/patient/TriageForm.tsx` / `aiBackendClient.ts` (Task 7)
 - Produces: `bookAppointment(input): Promise<{ ok: true, appointmentId: string } | { ok: false, error: 'slot_taken' | 'unknown' }>` where `input` includes an optional `triageResult: TriageResult | null`; `<PatientBookingPage doctorId patientId scheduledAt>` composing triage → booking
 
 - [ ] **Step 1: Write failing test covering the double-booking case (Review Focus)**
@@ -1398,7 +1398,7 @@ export async function bookAppointment(input: {
 }
 ```
 
-This means `TriageResult` (Task 3.1) needs the original `symptomText` echoed
+This means `TriageResult` (Task 7) needs the original `symptomText` echoed
 back so it can be stored here — add a `symptomText: string` field to the
 `TriageResult` interface in `apps/web/src/features/patient/aiBackendClient.ts`
 and have `submitTriage` include `input.symptomText` in its returned object.
@@ -1517,7 +1517,7 @@ export function PatientBookingPage({
 Note: if `TriageForm` classifies the symptoms as an emergency, it renders
 its own emergency banner internally and never calls `onComplete` — so
 `PatientBookingPage` never reaches `BookingForm` in that case, preserving
-the emergency-bypass rule from Task 3.1 and the Global Constraints.
+the emergency-bypass rule from Task 7 and the Global Constraints.
 
 - [ ] **Step 9: Run test, verify it passes**
 
@@ -1531,7 +1531,7 @@ git add apps/web/src/features/patient/BookingForm.tsx apps/web/src/features/pati
 git commit -m "feat: add patient booking flow with triage persistence and page composition"
 ```
 
-### Task 3.3: Reschedule & cancel
+### Task 9: Reschedule & cancel
 
 **Files:**
 - Create: `apps/web/src/features/patient/AppointmentActions.tsx`
@@ -1539,7 +1539,7 @@ git commit -m "feat: add patient booking flow with triage persistence and page c
 - Test: `apps/web/src/features/patient/AppointmentActions.test.tsx`
 
 **Interfaces:**
-- Consumes: `appointmentsApi` (Task 3.2)
+- Consumes: `appointmentsApi` (Task 8)
 - Produces: `rescheduleAppointment(id, newTime): Promise<BookResult>`, `cancelAppointment(id): Promise<{ ok: boolean }>`; `<AppointmentActions appointment={...} />`
 
 - [ ] **Step 1: Write failing tests**
@@ -1618,14 +1618,14 @@ git add apps/web/src/features/patient/AppointmentActions.tsx apps/web/src/featur
 git commit -m "feat: add appointment reschedule and cancel"
 ```
 
-### Task 3.4: Visit history with AI summaries
+### Task 10: Visit history with AI summaries
 
 **Files:**
 - Create: `apps/web/src/features/patient/VisitHistory.tsx`
 - Test: `apps/web/src/features/patient/VisitHistory.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `visit_notes.ai_patient_summary` (RLS policy `visit_notes_patient_read` from Task 1.2)
+- Consumes: `supabase` client, `visit_notes.ai_patient_summary` (RLS policy `visit_notes_patient_read` from Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -1729,14 +1729,14 @@ git commit -m "feat: add patient visit history with AI summaries"
 
 Produces: the doctor's daily queue (sorted by urgency), patient chart access, AI-assisted note-taking, and availability management.
 
-### Task 4.1: Daily queue view sorted by urgency
+### Task 11: Daily queue view sorted by urgency
 
 **Files:**
 - Create: `apps/web/src/features/doctor/DailyQueue.tsx`
 - Test: `apps/web/src/features/doctor/DailyQueue.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `appointments` + `triage_submissions` (Task 1.2)
+- Consumes: `supabase` client, `appointments` + `triage_submissions` (Task 2)
 
 - [ ] **Step 1: Write failing test asserting urgent patients sort first**
 
@@ -1846,14 +1846,14 @@ git add apps/web/src/features/doctor/DailyQueue.tsx
 git commit -m "feat: add doctor daily queue sorted by triage urgency"
 ```
 
-### Task 4.2: Patient chart view
+### Task 12: Patient chart view
 
 **Files:**
 - Create: `apps/web/src/features/doctor/PatientChart.tsx`
 - Test: `apps/web/src/features/doctor/PatientChart.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `patients`, `triage_submissions`, `visit_notes` (doctor read policies from Task 1.2)
+- Consumes: `supabase` client, `patients`, `triage_submissions`, `visit_notes` (doctor read policies from Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -1939,7 +1939,7 @@ git add apps/web/src/features/doctor/PatientChart.tsx
 git commit -m "feat: add doctor patient chart view"
 ```
 
-### Task 4.3: AI-assisted visit notes
+### Task 13: AI-assisted visit notes
 
 **Files:**
 - Create: `apps/web/src/features/doctor/VisitNoteEditor.tsx`
@@ -1947,7 +1947,7 @@ git commit -m "feat: add doctor patient chart view"
 - Test: `apps/web/src/features/doctor/VisitNoteEditor.test.tsx`
 
 **Interfaces:**
-- Consumes: `POST /summarize-visit` (Task 2.3), `supabase` client (`visit_notes` doctor-write policy, Task 1.2)
+- Consumes: `POST /summarize-visit` (Task 6), `supabase` client (`visit_notes` doctor-write policy, Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -2064,14 +2064,14 @@ git add apps/web/src/features/doctor/VisitNoteEditor.tsx apps/web/src/features/d
 git commit -m "feat: add AI-assisted visit note editor"
 ```
 
-### Task 4.4: Manage availability
+### Task 14: Manage availability
 
 **Files:**
 - Create: `apps/web/src/features/doctor/AvailabilityEditor.tsx`
 - Test: `apps/web/src/features/doctor/AvailabilityEditor.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `doctors.working_hours` jsonb column (Task 1.2)
+- Consumes: `supabase` client, `doctors.working_hours` jsonb column (Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -2151,14 +2151,14 @@ git commit -m "feat: add doctor availability editor"
 
 Produces: the master calendar, check-in/queue management, the no-show heuristic + dashboard, and patient record CRUD — respecting the RLS boundary that keeps clinical note content out of front-desk's reach.
 
-### Task 5.1: Master calendar across all doctors
+### Task 15: Master calendar across all doctors
 
 **Files:**
 - Create: `apps/web/src/features/frontdesk/MasterCalendar.tsx`
 - Test: `apps/web/src/features/frontdesk/MasterCalendar.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `appointments_front_desk` RLS policy (Task 1.2)
+- Consumes: `supabase` client, `appointments_front_desk` RLS policy (Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -2266,14 +2266,14 @@ git add apps/web/src/features/frontdesk/MasterCalendar.tsx
 git commit -m "feat: add front-desk master calendar across all doctors"
 ```
 
-### Task 5.2: Check-in & queue management
+### Task 16: Check-in & queue management
 
 **Files:**
 - Create: `apps/web/src/features/frontdesk/CheckIn.tsx`
 - Test: `apps/web/src/features/frontdesk/CheckIn.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `appointments.status` (Task 1.2)
+- Consumes: `supabase` client, `appointments.status` (Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -2339,7 +2339,7 @@ git add apps/web/src/features/frontdesk/CheckIn.tsx
 git commit -m "feat: add front-desk patient check-in"
 ```
 
-### Task 5.3: No-show heuristic scoring + dashboard
+### Task 17: No-show heuristic scoring + dashboard
 
 **Files:**
 - Create: `apps/web/src/features/frontdesk/noShowHeuristic.ts`
@@ -2542,14 +2542,14 @@ git add apps/web/src/features/frontdesk/noShowHeuristic.ts apps/web/src/features
 git commit -m "feat: add no-show heuristic and front-desk risk dashboard"
 ```
 
-### Task 5.4: Patient record CRUD
+### Task 18: Patient record CRUD
 
 **Files:**
 - Create: `apps/web/src/features/frontdesk/PatientRecordForm.tsx`
 - Test: `apps/web/src/features/frontdesk/PatientRecordForm.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client, `patients_staff_read`/`patients` RLS policies (Task 1.2)
+- Consumes: `supabase` client, `patients_staff_read`/`patients` RLS policies (Task 2)
 
 - [ ] **Step 1: Write failing test**
 
@@ -2629,7 +2629,7 @@ git commit -m "feat: add front-desk patient record editing"
 
 Produces: working email notifications (confirmation + reminder) and free-tier deployment configuration for all three deployable pieces.
 
-### Task 6.1: Email notifications
+### Task 19: Email notifications
 
 **Files:**
 - Create: `apps/ai-backend/src/notifications/email.ts`
@@ -2778,7 +2778,7 @@ git add apps/ai-backend/src/notifications apps/ai-backend/src/routes/notify.ts a
 git commit -m "feat: add email confirmation and reminder notifications"
 ```
 
-### Task 6.2: Free-tier deployment configuration
+### Task 20: Free-tier deployment configuration
 
 **Files:**
 - Create: `apps/web/vercel.json`
