@@ -1,6 +1,26 @@
 import { useState } from 'react'
 import { bookAppointment } from './appointmentsApi'
-import type { TriageResult } from './aiBackendClient'
+import { sendBookingConfirmation, type TriageResult } from './aiBackendClient'
+import { supabase } from '../../lib/supabaseClient'
+
+async function notifyBookingConfirmed(doctorId: string, scheduledAt: string) {
+  // Best-effort: the appointment is already booked regardless of whether
+  // this succeeds, so a failure here must never affect the "booked"
+  // status the patient sees.
+  try {
+    const [{ data: doctorRow }, { data: userData }] = await Promise.all([
+      supabase.from('doctors').select('profiles(full_name)').eq('profile_id', doctorId).single(),
+      supabase.auth.getUser(),
+    ])
+    const doctorName = (doctorRow as any)?.profiles?.full_name
+    const to = userData.user?.email
+    if (doctorName && to) {
+      await sendBookingConfirmation({ to, scheduledAt, doctorName })
+    }
+  } catch {
+    // swallowed deliberately — see comment above
+  }
+}
 
 export function BookingForm({
   doctorId, patientId, scheduledAt, triageResult,
@@ -9,8 +29,10 @@ export function BookingForm({
 
   async function handleConfirm() {
     const result = await bookAppointment({ doctorId, patientId, scheduledAt, triageResult })
-    if (result.ok) setStatus('booked')
-    else if (result.error === 'slot_taken') setStatus('slot_taken')
+    if (result.ok) {
+      setStatus('booked')
+      void notifyBookingConfirmed(doctorId, scheduledAt)
+    } else if (result.error === 'slot_taken') setStatus('slot_taken')
     else setStatus('error')
   }
 

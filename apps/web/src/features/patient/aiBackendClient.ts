@@ -30,3 +30,19 @@ export async function submitTriage(input: TriageInput): Promise<TriageResult> {
   const body = await res.json()
   return { ...body, symptomText: input.symptomText }
 }
+
+export async function sendBookingConfirmation(input: {
+  to: string
+  scheduledAt: string
+  doctorName: string
+}): Promise<void> {
+  const { data } = await supabase.auth.getSession()
+  await fetch(`${AI_BACKEND_URL}/notify/appointment-confirmation`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${data.session?.access_token ?? ''}`,
+    },
+    body: JSON.stringify(input),
+  })
+}
