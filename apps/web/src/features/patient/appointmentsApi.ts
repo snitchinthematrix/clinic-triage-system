@@ -10,6 +10,7 @@ export async function bookAppointment(input: {
   patientId: string
   scheduledAt: string
   triageResult?: TriageResult | null
+  source?: 'self_booked' | 'front_desk'
 }): Promise<BookResult> {
   const urgency =
     input.triageResult && input.triageResult.urgency !== 'unknown' ? input.triageResult.urgency : null
@@ -23,7 +24,7 @@ export async function bookAppointment(input: {
     p_doctor_id: input.doctorId,
     p_patient_id: input.patientId,
     p_scheduled_at: input.scheduledAt,
-    p_source: 'self_booked',
+    p_source: input.source ?? 'self_booked',
     p_urgency_level: urgency,
     p_symptom_text: input.triageResult?.symptomText ?? null,
     p_suggested_department: input.triageResult?.suggestedDepartment ?? null,

@@ -41,7 +41,15 @@ describe('bookAppointment', () => {
     const result = await bookAppointment({ doctorId: 'doc-1', patientId: 'pat-1', scheduledAt: '2026-10-01T09:00:00Z' })
     expect(result).toEqual({ ok: true, appointmentId: 'appt-2' })
     expect(supabase.rpc).toHaveBeenCalledWith('book_appointment_with_triage', expect.objectContaining({
-      p_urgency_level: null, p_symptom_text: null,
+      p_urgency_level: null, p_symptom_text: null, p_source: 'self_booked',
+    }))
+  })
+
+  it('records source as front_desk for a walk-in booking made by front-desk staff', async () => {
+    ;(supabase.rpc as any).mockResolvedValue({ data: 'appt-3', error: null })
+    await bookAppointment({ doctorId: 'doc-1', patientId: 'pat-1', scheduledAt: '2026-10-01T09:00:00Z', source: 'front_desk' })
+    expect(supabase.rpc).toHaveBeenCalledWith('book_appointment_with_triage', expect.objectContaining({
+      p_source: 'front_desk',
     }))
   })
 })
