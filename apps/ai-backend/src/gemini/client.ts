@@ -5,8 +5,16 @@ export class GeminiUnavailableError extends Error {
   }
 }
 
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+// gemini-1.5-flash was retired by Google (found by testing against the
+// real API — it now 404s). "gemini-flash-latest" is Google's own alias
+// for the current recommended flash model, chosen so this doesn't need a
+// code change again next time a model is retired. GEMINI_MODEL overrides
+// it without a deploy, for when it does need to be pinned to a specific
+// version.
+function geminiUrl(): string {
+  const model = process.env.GEMINI_MODEL ?? 'gemini-flash-latest'
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+}
 
 export async function callGemini(prompt: string, _schema: object): Promise<Record<string, unknown>> {
   const apiKey = process.env.GEMINI_API_KEY
@@ -14,7 +22,7 @@ export async function callGemini(prompt: string, _schema: object): Promise<Recor
 
   let response: Response
   try {
-    response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+    response = await fetch(`${geminiUrl()}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
