@@ -314,16 +314,22 @@ language sql stable as $$
   select role from profiles where id = auth.uid()
 $$;
 
--- profiles: everyone can read their own profile
+-- profiles: everyone can read their own profile; a new user may insert their own row on signup
 create policy profiles_self_select on profiles for select
   using (id = auth.uid());
+create policy profiles_self_insert on profiles for insert
+  with check (id = auth.uid());
 
--- patients: patient reads/writes own row; doctors/front_desk read all
+-- patients: patient reads/writes own row; doctors read all; front_desk reads AND writes
+-- (front_desk needs write access for patient record management, Milestone 5 Task 5.4)
 create policy patients_self on patients for all
   using (profile_id = auth.uid())
   with check (profile_id = auth.uid());
-create policy patients_staff_read on patients for select
-  using (current_role_value() in ('doctor', 'front_desk'));
+create policy patients_doctor_read on patients for select
+  using (current_role_value() = 'doctor');
+create policy patients_front_desk_write on patients for all
+  using (current_role_value() = 'front_desk')
+  with check (current_role_value() = 'front_desk');
 
 -- appointments: patient sees own; doctor sees own schedule; front_desk sees all
 create policy appointments_patient on appointments for all
@@ -1127,7 +1133,7 @@ import * as client from './aiBackendClient'
 describe('TriageForm', () => {
   it('shows an emergency banner immediately, before any booking UI, when urgency is emergency', async () => {
     vi.spyOn(client, 'submitTriage').mockResolvedValue({
-      urgency: 'emergency', suggestedDepartment: 'Emergency', disclaimer: 'not a diagnosis',
+      urgency: 'emergency', suggestedDepartment: 'Emergency', disclaimer: 'not a diagnosis', symptomText: 'chest pain',
     })
     render(<TriageForm onComplete={vi.fn()} />)
     fireEvent.change(screen.getByLabelText(/describe your symptoms/i), { target: { value: 'chest pain' } })
@@ -1143,7 +1149,7 @@ describe('TriageForm', () => {
   it('calls onComplete with the result for non-emergency urgency', async () => {
     const onComplete = vi.fn()
     vi.spyOn(client, 'submitTriage').mockResolvedValue({
-      urgency: 'routine', suggestedDepartment: 'General Practice', disclaimer: 'not a diagnosis',
+      urgency: 'routine', suggestedDepartment: 'General Practice', disclaimer: 'not a diagnosis', symptomText: 'mild cough',
     })
     render(<TriageForm onComplete={onComplete} />)
     fireEvent.change(screen.getByLabelText(/describe your symptoms/i), { target: { value: 'mild cough' } })
@@ -1177,6 +1183,7 @@ export interface TriageResult {
   urgency: 'routine' | 'soon' | 'urgent' | 'emergency' | 'unknown'
   suggestedDepartment: string | null
   disclaimer: string
+  symptomText: string
 }
 
 const AI_BACKEND_URL = import.meta.env.VITE_AI_BACKEND_URL
@@ -1188,9 +1195,14 @@ export async function submitTriage(input: TriageInput): Promise<TriageResult> {
     body: JSON.stringify(input),
   })
   if (!res.ok) throw new Error('Triage request failed')
-  return res.json()
+  const body = await res.json()
+  return { ...body, symptomText: input.symptomText }
 }
 ```
+
+`symptomText` is echoed back onto the result (rather than only returned by
+the backend) so that Task 3.2's booking flow can persist the original
+symptom text into `triage_submissions` without a second round-trip.
 
 - [ ] **Step 4: Implement `TriageForm`**
 
@@ -1275,16 +1287,28 @@ git add apps/web/src/features/patient/TriageForm.tsx apps/web/src/features/patie
 git commit -m "feat: add patient symptom triage form with emergency bypass"
 ```
 
-### Task 3.2: Booking flow with double-booking prevention
+### Task 3.2: Booking flow with double-booking prevention and triage persistence
+
+This task also closes a gap between Milestone 3 and Milestone 4: Task 3.1's
+`TriageForm` computes an AI urgency/department but nothing before this task
+ever saves it, yet Task 4.1 (doctor queue, sorted by urgency) and Task 4.2
+(patient chart, showing latest reported symptoms) both read
+`appointments.urgency_level` and `triage_submissions` as if they were
+already populated. This task makes `bookAppointment` respons ible for
+persisting the triage result alongside the appointment it belongs to, and
+adds the page that composes `TriageForm` → `BookingForm` so the data
+actually flows end to end.
 
 **Files:**
 - Create: `apps/web/src/features/patient/BookingForm.tsx`
 - Create: `apps/web/src/features/patient/appointmentsApi.ts`
+- Create: `apps/web/src/features/patient/PatientBookingPage.tsx`
 - Test: `apps/web/src/features/patient/BookingForm.test.tsx`
+- Test: `apps/web/src/features/patient/PatientBookingPage.test.tsx`
 
 **Interfaces:**
-- Consumes: `supabase` client (Task 1.2), `appointments` table `unique (doctor_id, scheduled_at)` constraint (Task 1.2)
-- Produces: `bookAppointment(input): Promise<{ ok: true, appointmentId: string } | { ok: false, error: 'slot_taken' | 'unknown' }>`
+- Consumes: `supabase` client (Task 1.2), `appointments` table `unique (doctor_id, scheduled_at)` constraint (Task 1.2), `TriageForm` and `TriageResult` from `apps/web/src/features/patient/TriageForm.tsx` / `aiBackendClient.ts` (Task 3.1)
+- Produces: `bookAppointment(input): Promise<{ ok: true, appointmentId: string } | { ok: false, error: 'slot_taken' | 'unknown' }>` where `input` includes an optional `triageResult: TriageResult | null`; `<PatientBookingPage doctorId patientId scheduledAt>` composing triage → booking
 
 - [ ] **Step 1: Write failing test covering the double-booking case (Review Focus)**
 
@@ -1321,11 +1345,12 @@ describe('BookingForm', () => {
 Run: `npm run test -w apps/web`
 Expected: FAIL — `BookingForm` and `appointmentsApi` do not exist
 
-- [ ] **Step 3: Implement `appointmentsApi`**
+- [ ] **Step 3: Implement `appointmentsApi`, persisting the triage result with the appointment**
 
 ```ts
 // apps/web/src/features/patient/appointmentsApi.ts
 import { supabase } from '../../lib/supabaseClient'
+import type { TriageResult } from './aiBackendClient'
 
 export type BookResult =
   | { ok: true; appointmentId: string }
@@ -1335,7 +1360,11 @@ export async function bookAppointment(input: {
   doctorId: string
   patientId: string
   scheduledAt: string
+  triageResult?: TriageResult | null
 }): Promise<BookResult> {
+  const urgency =
+    input.triageResult && input.triageResult.urgency !== 'unknown' ? input.triageResult.urgency : null
+
   const { data, error } = await supabase
     .from('appointments')
     .insert({
@@ -1343,6 +1372,7 @@ export async function bookAppointment(input: {
       patient_id: input.patientId,
       scheduled_at: input.scheduledAt,
       source: 'self_booked',
+      urgency_level: urgency,
     })
     .select('id')
     .single()
@@ -1352,9 +1382,26 @@ export async function bookAppointment(input: {
     if (error.code === '23505') return { ok: false, error: 'slot_taken' }
     return { ok: false, error: 'unknown' }
   }
+
+  if (input.triageResult) {
+    await supabase.from('triage_submissions').insert({
+      patient_id: input.patientId,
+      appointment_id: data.id,
+      symptom_text: input.triageResult.symptomText,
+      ai_urgency: urgency,
+      ai_suggested_department: input.triageResult.suggestedDepartment,
+      ai_raw_response: input.triageResult,
+    })
+  }
+
   return { ok: true, appointmentId: data.id }
 }
 ```
+
+This means `TriageResult` (Task 3.1) needs the original `symptomText` echoed
+back so it can be stored here — add a `symptomText: string` field to the
+`TriageResult` interface in `apps/web/src/features/patient/aiBackendClient.ts`
+and have `submitTriage` include `input.symptomText` in its returned object.
 
 - [ ] **Step 4: Implement `BookingForm`**
 
@@ -1362,14 +1409,15 @@ export async function bookAppointment(input: {
 // apps/web/src/features/patient/BookingForm.tsx
 import { useState } from 'react'
 import { bookAppointment } from './appointmentsApi'
+import type { TriageResult } from './aiBackendClient'
 
 export function BookingForm({
-  doctorId, patientId, scheduledAt,
-}: { doctorId: string; patientId: string; scheduledAt: string }) {
+  doctorId, patientId, scheduledAt, triageResult,
+}: { doctorId: string; patientId: string; scheduledAt: string; triageResult?: TriageResult | null }) {
   const [status, setStatus] = useState<'idle' | 'booked' | 'slot_taken' | 'error'>('idle')
 
   async function handleConfirm() {
-    const result = await bookAppointment({ doctorId, patientId, scheduledAt })
+    const result = await bookAppointment({ doctorId, patientId, scheduledAt, triageResult })
     if (result.ok) setStatus('booked')
     else if (result.error === 'slot_taken') setStatus('slot_taken')
     else setStatus('error')
@@ -1395,11 +1443,92 @@ export function BookingForm({
 Run: `npm run test -w apps/web`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Write failing test for the composing page (triage result flows into booking)**
+
+```tsx
+// apps/web/src/features/patient/PatientBookingPage.test.tsx
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { PatientBookingPage } from './PatientBookingPage'
+import * as triageClient from './aiBackendClient'
+import * as appointmentsApi from './appointmentsApi'
+
+describe('PatientBookingPage', () => {
+  it('passes the triage result into bookAppointment once both steps complete', async () => {
+    vi.spyOn(triageClient, 'submitTriage').mockResolvedValue({
+      urgency: 'soon', suggestedDepartment: 'General Practice', disclaimer: 'not a diagnosis',
+      symptomText: 'mild fever',
+    })
+    const bookSpy = vi.spyOn(appointmentsApi, 'bookAppointment').mockResolvedValue({ ok: true, appointmentId: 'appt-1' })
+
+    render(<PatientBookingPage doctorId="doc-1" patientId="pat-1" scheduledAt="2026-10-01T09:00:00Z" />)
+
+    fireEvent.change(screen.getByLabelText(/describe your symptoms/i), { target: { value: 'mild fever' } })
+    fireEvent.change(screen.getByLabelText(/severity/i), { target: { value: '3' } })
+    fireEvent.click(screen.getByText(/submit/i))
+
+    await waitFor(() => screen.getByText(/confirm booking/i))
+    fireEvent.click(screen.getByText(/confirm booking/i))
+
+    await waitFor(() => {
+      expect(bookSpy).toHaveBeenCalledWith(expect.objectContaining({
+        doctorId: 'doc-1', patientId: 'pat-1', scheduledAt: '2026-10-01T09:00:00Z',
+        triageResult: expect.objectContaining({ urgency: 'soon', symptomText: 'mild fever' }),
+      }))
+    })
+  })
+})
+```
+
+- [ ] **Step 7: Run test, verify it fails**
+
+Run: `npm run test -w apps/web`
+Expected: FAIL — `PatientBookingPage` does not exist
+
+- [ ] **Step 8: Implement `PatientBookingPage`**
+
+```tsx
+// apps/web/src/features/patient/PatientBookingPage.tsx
+import { useState } from 'react'
+import { TriageForm } from './TriageForm'
+import { BookingForm } from './BookingForm'
+import type { TriageResult } from './aiBackendClient'
+
+export function PatientBookingPage({
+  doctorId, patientId, scheduledAt,
+}: { doctorId: string; patientId: string; scheduledAt: string }) {
+  const [triageResult, setTriageResult] = useState<TriageResult | null>(null)
+
+  if (!triageResult) {
+    return <TriageForm onComplete={setTriageResult} />
+  }
+
+  return (
+    <BookingForm
+      doctorId={doctorId}
+      patientId={patientId}
+      scheduledAt={scheduledAt}
+      triageResult={triageResult}
+    />
+  )
+}
+```
+
+Note: if `TriageForm` classifies the symptoms as an emergency, it renders
+its own emergency banner internally and never calls `onComplete` — so
+`PatientBookingPage` never reaches `BookingForm` in that case, preserving
+the emergency-bypass rule from Task 3.1 and the Global Constraints.
+
+- [ ] **Step 9: Run test, verify it passes**
+
+Run: `npm run test -w apps/web`
+Expected: PASS
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add apps/web/src/features/patient/BookingForm.tsx apps/web/src/features/patient/appointmentsApi.ts
-git commit -m "feat: add patient booking flow with slot-taken handling"
+git add apps/web/src/features/patient/BookingForm.tsx apps/web/src/features/patient/appointmentsApi.ts apps/web/src/features/patient/PatientBookingPage.tsx apps/web/src/features/patient/aiBackendClient.ts
+git commit -m "feat: add patient booking flow with triage persistence and page composition"
 ```
 
 ### Task 3.3: Reschedule & cancel
@@ -2296,18 +2425,29 @@ vi.mock('../../lib/supabaseClient', () => ({ supabase: { from: vi.fn() } }))
 
 describe('NoShowDashboard', () => {
   it('flags appointments above the risk threshold', async () => {
-    ;(supabase.from as any).mockReturnValue({
-      select: () => ({
-        gte: () => ({
-          lte: () => Promise.resolve({
-            data: [{
-              id: 'a1', scheduled_at: '2026-10-28T09:00:00Z', source: 'self_booked',
-              patients: { profiles: { full_name: 'Alice' } }, past_no_show_count: 4,
-            }],
-            error: null,
-          }),
-        }),
-      }),
+    ;(supabase.from as any).mockImplementation((table: string) => {
+      if (table === 'appointments') {
+        return {
+          select: (cols: string) => {
+            if (cols.includes('count')) {
+              // past no-show count query, called once per row
+              return { eq: () => ({ eq: () => Promise.resolve({ count: 4, error: null }) }) }
+            }
+            return {
+              gte: () => ({
+                lte: () => Promise.resolve({
+                  data: [{
+                    id: 'a1', scheduled_at: '2026-10-28T09:00:00Z', source: 'self_booked',
+                    patient_id: 'pat-1', patients: { profiles: { full_name: 'Alice' } },
+                  }],
+                  error: null,
+                }),
+              }),
+            }
+          },
+        }
+      }
+      throw new Error(`unexpected table ${table}`)
     })
     render(<NoShowDashboard date="2026-09-28" />)
     await waitFor(() => expect(screen.getByText(/alice/i)).toBeInTheDocument())
@@ -2337,6 +2477,15 @@ interface RiskRow {
 
 const HIGH_RISK_THRESHOLD = 0.6
 
+async function fetchPastNoShowCount(patientId: string): Promise<number> {
+  const { count } = await supabase
+    .from('appointments')
+    .select('id, count', { count: 'exact', head: true })
+    .eq('patient_id', patientId)
+    .eq('status', 'no_show')
+  return count ?? 0
+}
+
 export function NoShowDashboard({ date }: { date: string }) {
   const [rows, setRows] = useState<RiskRow[]>([])
 
@@ -2345,25 +2494,27 @@ export function NoShowDashboard({ date }: { date: string }) {
     const dayEnd = `${date}T23:59:59Z`
     supabase
       .from('appointments')
-      .select('id, scheduled_at, source, past_no_show_count, patients(profiles(full_name))')
+      .select('id, scheduled_at, source, patient_id, patients(profiles(full_name))')
       .gte('scheduled_at', dayStart)
       .lte('scheduled_at', dayEnd)
-      .then(({ data }: any) => {
+      .then(async ({ data }: any) => {
         if (!data) return
         const now = new Date(date)
-        setRows(
-          data.map((r: any) => {
+        const computed = await Promise.all(
+          data.map(async (r: any) => {
             const scheduled = new Date(r.scheduled_at)
             const leadTimeDays = Math.max(0, (scheduled.getTime() - now.getTime()) / 86_400_000)
+            const pastNoShowCount = await fetchPastNoShowCount(r.patient_id)
             const risk = computeNoShowRisk({
               leadTimeDays,
               dayOfWeek: scheduled.getUTCDay(),
-              pastNoShowCount: r.past_no_show_count ?? 0,
+              pastNoShowCount,
               source: r.source,
             })
             return { id: r.id, patientName: r.patients.profiles.full_name, risk }
           })
         )
+        setRows(computed)
       })
   }, [date])
 
