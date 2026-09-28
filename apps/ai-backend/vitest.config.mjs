@@ -5,6 +5,7 @@ export default defineConfig({
     exclude: ['node_modules', 'dist'],
     env: {
       GEMINI_API_KEY: 'test-gemini-key',
+      RESEND_API_KEY: 'test-resend-key',
     },
   },
 })
