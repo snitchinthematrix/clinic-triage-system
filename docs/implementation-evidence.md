@@ -16,6 +16,12 @@ npm run test -w apps/web         # 22 test files, 29 tests
 npm run test -w apps/ai-backend  # 7 test files, 21 tests
 npm run test                     # both, sequentially (50 tests total)
 npm run build -w apps/web        # production build (must succeed for Vercel)
+
+# requires Docker running:
+npx supabase start               # local Postgres + Supabase stack
+npx supabase db reset            # (re)applies all migrations from scratch
+npx supabase test db             # runs supabase/tests/rls.test.sql (7 pgTAP assertions)
+npx supabase stop                # when done
 ```
 
 All 50 tests pass and the production build succeeds as of the final commit
@@ -26,13 +32,12 @@ the original 20-task implementation pass; the **Code review & fix pass**
 section below it documents a subsequent fresh-context review and the fixes
 that followed, which is where the test/commit counts above come from.
 
-**Not verified:** the Postgres/RLS layer. Docker/Podman is not installed in
-this execution environment, so `npx supabase start`, `npx supabase db
-reset`, and `npx supabase test db` could not run. The schema and RLS SQL
-(`supabase/migrations/`, `supabase/tests/rls.test.sql`) were written and
-manually reviewed for correctness but never executed against a live
-Postgres instance. This is the single biggest residual risk — see
-"Known limitations" below.
+**Now verified:** the Postgres/RLS layer, once Docker became available
+partway through this session — `npx supabase start`, `npx supabase db
+reset`, and `npx supabase test db` all ran, and the full 7-assertion
+pgTAP suite passes against live Postgres. Running it for real caught a
+genuine RLS recursion bug that manual review alone had missed — see
+"Known limitations" item 1 below for the fix.
 
 ---
 
@@ -368,20 +373,27 @@ succeeds.
 
 ## Known limitations
 
-1. **RLS / pgTAP never executed against live Postgres — including the
-   Critical-fix migration.** No Docker/Podman available in this
-   environment. `supabase/migrations/0001`–`0003` and
-   `supabase/tests/rls.test.sql` (including the new auth-provisioning
-   trigger and read policies added in the fix pass, migration `0003`) were
-   written and manually reviewed but never run. **Before deploying, run
-   `npx supabase db reset && npx supabase test db` in an environment with
-   Docker and confirm all pgTAP assertions pass** — this is the single
-   highest-priority verification step before this branch goes live, since
-   the privilege-escalation fix (C1) and the new read policies (C3) are
-   exactly the kind of RLS logic that's easy to get subtly wrong without
-   running it. The pgTAP suite itself is also known-incomplete (see
-   Important finding I12 above: no positive-control assertions, no
-   coverage of the C1 escalation case, no triage-isolation test).
+1. ~~RLS / pgTAP never executed against live Postgres~~ — **resolved.**
+   Docker became available partway through this session; the local
+   Supabase stack was started (`npx supabase start`) and the full pgTAP
+   suite run against real Postgres (`npx supabase db reset && npx supabase
+   test db`). This caught a real bug that manual review had missed: once
+   `profiles_front_desk_read`/`profiles_doctor_read_own_patients` called
+   `current_role_value()` from a policy *on* `profiles` itself,
+   `current_role_value()`'s own `select role from profiles where id =
+   auth.uid()` recursed into that same policy and blew the Postgres stack
+   ("stack depth limit exceeded"). Fixed by making `current_role_value()`
+   `security definer` (its inner query now bypasses RLS instead of
+   re-entering it) — see migration `0003_auth_provisioning_and_read_policies.sql`.
+   The suite was also strengthened per Important finding I12: added
+   positive-control assertions (a user reading their *own* allowed row, not
+   just being blocked from someone else's), a `triage_submissions`
+   isolation case, and a regression test for the C1 privilege-escalation
+   fix. **All 7 pgTAP assertions now pass against live Postgres** (commit
+   `19ff41a`). `seed.sql` was also renamed to `seed.pgsql` — it was being
+   picked up by `pg_prove`'s `*.sql` glob as its own top-level test,
+   committing its fixtures outside a transaction and colliding with itself
+   on every subsequent run.
 2. **No integration test against a real Gemini or Resend API call** — all
    AI backend tests mock `fetch`/`callGemini`/`sendEmail`. This is
    consistent with the plan (real API calls in unit tests would be flaky
