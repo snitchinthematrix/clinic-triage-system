@@ -11,19 +11,18 @@ export function PatientSignupPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
-    const { data, error: signUpError } = await supabase.auth.signUp({ email, password })
+    // profiles/patients rows are provisioned server-side by the
+    // on_auth_user_created trigger (always role = 'patient'), never by the
+    // client — a client-side insert could otherwise set an arbitrary role.
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName } },
+    })
     if (signUpError || !data.user) {
       setError(signUpError?.message ?? 'Signup failed')
       return
     }
-    const { error: profileError } = await supabase.from('profiles').insert({
-      id: data.user.id, role: 'patient', full_name: fullName,
-    })
-    if (profileError) {
-      setError(profileError.message)
-      return
-    }
-    await supabase.from('patients').insert({ profile_id: data.user.id })
     setDone(true)
   }
 
