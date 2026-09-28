@@ -7,27 +7,28 @@ interface Visit {
   ai_patient_summary: string | null
 }
 
-export function VisitHistory({ patientId }: { patientId: string }) {
+// patientId is accepted for interface stability (callers pass the signed-in
+// user's id) but the query itself no longer uses it: get_my_visit_summaries
+// derives the patient from auth.uid() server-side, so a patient can never
+// query another patient's visit summaries by passing a different id here.
+export function VisitHistory({ patientId: _patientId }: { patientId: string }) {
   const [visits, setVisits] = useState<Visit[]>([])
 
   useEffect(() => {
     supabase
-      .from('appointments')
-      .select('id, scheduled_at, visit_notes(ai_patient_summary)')
-      .eq('patient_id', patientId)
-      .order('scheduled_at', { ascending: false })
+      .rpc('get_my_visit_summaries')
       .then(({ data }: { data: any }) => {
         if (data) {
           setVisits(
             data.map((row: any) => ({
-              appointment_id: row.appointment_id ?? row.id,
+              appointment_id: row.appointment_id,
               scheduled_at: row.scheduled_at,
-              ai_patient_summary: row.ai_patient_summary ?? row.visit_notes?.ai_patient_summary ?? null,
+              ai_patient_summary: row.ai_patient_summary ?? null,
             }))
           )
         }
       })
-  }, [patientId])
+  }, [])
 
   return (
     <ul>
