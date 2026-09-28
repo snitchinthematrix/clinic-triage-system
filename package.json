@@ -1,0 +1,10 @@
+{
+  "name": "clinic-triage-system",
+  "private": true,
+  "workspaces": ["apps/web", "apps/ai-backend"],
+  "scripts": {
+    "dev:web": "npm run dev -w apps/web",
+    "dev:ai": "npm run dev -w apps/ai-backend",
+    "test": "npm run test -w apps/web && npm run test -w apps/ai-backend"
+  }
+}
