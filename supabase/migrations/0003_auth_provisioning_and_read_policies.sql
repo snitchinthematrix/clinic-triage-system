@@ -38,6 +38,21 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
 
+-- current_role_value() queries profiles, and 0002 originally only ever
+-- used it in policies on OTHER tables (patients, appointments, ...), so
+-- that inner query never hit RLS recursively. The policies below put
+-- current_role_value() into a policy ON profiles itself for the first
+-- time (profiles_front_desk_read, profiles_doctor_read_own_patients) —
+-- without this, its own "select role from profiles where id = auth.uid()"
+-- would be evaluated under profiles' own RLS, re-entering the very policy
+-- being evaluated and blowing the stack ("stack depth limit exceeded").
+-- security definer makes the inner query run as the function owner,
+-- bypassing RLS, which breaks the recursion.
+create or replace function current_role_value() returns user_role
+language sql stable security definer set search_path = public as $$
+  select role from profiles where id = auth.uid()
+$$;
+
 -- doctors: every authenticated user can read the doctor list (needed to
 -- book with a doctor and to render doctor names in queue/calendar views);
 -- only the doctor themself can update their own row.
