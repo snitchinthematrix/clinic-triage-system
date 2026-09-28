@@ -7,6 +7,7 @@ export function TriageForm({ onComplete }: { onComplete: (result: TriageResult) 
   const [durationDays, setDurationDays] = useState(1)
   const [severity, setSeverity] = useState(1)
   const [emergency, setEmergency] = useState(false)
+  const [result, setResult] = useState<TriageResult | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
 
@@ -15,12 +16,16 @@ export function TriageForm({ onComplete }: { onComplete: (result: TriageResult) 
     setSubmitting(true)
     setSubmitError(null)
     try {
-      const result = await submitTriage({ symptomText, bodyArea, durationDays, severity })
-      if (result.urgency === 'emergency') {
+      const triageResult = await submitTriage({ symptomText, bodyArea, durationDays, severity })
+      if (triageResult.urgency === 'emergency') {
         setEmergency(true)
         return
       }
-      onComplete(result)
+      // Show the disclaimer (and, for an 'unknown' result, the "please
+      // call the clinic" fallback message) before ever reaching booking —
+      // previously onComplete fired immediately and this text was never
+      // shown to the patient at all.
+      setResult(triageResult)
     } catch {
       setSubmitError(
         'We could not reach the clinic to assess your symptoms right now. Please call the clinic directly, or call emergency services if this is urgent.'
@@ -36,6 +41,16 @@ export function TriageForm({ onComplete }: { onComplete: (result: TriageResult) 
         Your symptoms may be a medical emergency. Please call emergency services (911) or go to
         the nearest emergency room immediately. Do not wait for an appointment.
       </p>
+    )
+  }
+
+  if (result) {
+    return (
+      <div>
+        <p>{result.disclaimer}</p>
+        {result.suggestedDepartment && <p>Suggested department: {result.suggestedDepartment}</p>}
+        <button onClick={() => onComplete(result)}>Continue to booking</button>
+      </div>
     )
   }
 
