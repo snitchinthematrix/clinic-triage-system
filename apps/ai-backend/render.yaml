@@ -12,3 +12,7 @@ services:
         sync: false
       - key: NOTIFICATION_FROM_EMAIL
         sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false

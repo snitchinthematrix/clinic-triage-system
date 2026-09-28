@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import request from 'supertest'
 import { app } from '../server'
 import * as geminiClient from '../gemini/client'
+import { testBearerToken } from '../auth/testAuthToken'
 
 describe('POST /summarize-visit', () => {
   it('returns clinical and patient-facing summaries', async () => {
@@ -9,7 +10,7 @@ describe('POST /summarize-visit', () => {
       clinicalSummary: 'Pt presents with URI symptoms, afebrile, prescribed rest and fluids.',
       patientSummary: 'You have a mild upper respiratory infection. Rest, drink fluids, follow up if worse.',
     })
-    const res = await request(app).post('/summarize-visit').send({
+    const res = await request(app).post('/summarize-visit').set('Authorization', testBearerToken()).send({
       rawNotes: 'pt c/o cough, congestion x3d, no fever, lungs clear, dx viral URI, rest+fluids',
     })
     expect(res.status).toBe(200)
@@ -18,7 +19,7 @@ describe('POST /summarize-visit', () => {
   })
 
   it('rejects empty notes', async () => {
-    const res = await request(app).post('/summarize-visit').send({ rawNotes: '' })
+    const res = await request(app).post('/summarize-visit').set('Authorization', testBearerToken()).send({ rawNotes: '' })
     expect(res.status).toBe(400)
   })
 
@@ -26,7 +27,12 @@ describe('POST /summarize-visit', () => {
     vi.spyOn(geminiClient, 'callGemini').mockRejectedValue(
       new geminiClient.GeminiUnavailableError('down')
     )
-    const res = await request(app).post('/summarize-visit').send({ rawNotes: 'some notes' })
+    const res = await request(app).post('/summarize-visit').set('Authorization', testBearerToken()).send({ rawNotes: 'some notes' })
     expect(res.status).toBe(502)
+  })
+
+  it('rejects requests with no auth token', async () => {
+    const res = await request(app).post('/summarize-visit').send({ rawNotes: 'some notes' })
+    expect(res.status).toBe(401)
   })
 })
