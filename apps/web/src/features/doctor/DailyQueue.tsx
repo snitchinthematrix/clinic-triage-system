@@ -14,10 +14,15 @@ export function DailyQueue({ doctorId, date }: { doctorId: string; date: string 
   const [items, setItems] = useState<QueueItem[]>([])
 
   useEffect(() => {
+    const dayStart = `${date}T00:00:00Z`
+    const dayEnd = `${date}T23:59:59Z`
     supabase
       .from('appointments')
       .select('id, scheduled_at, urgency_level, patients(profiles(full_name))')
       .eq('doctor_id', doctorId)
+      .gte('scheduled_at', dayStart)
+      .lte('scheduled_at', dayEnd)
+      .in('status', ['booked', 'checked_in', 'in_progress'])
       .order('scheduled_at', { ascending: true })
       .then(({ data }: { data: any }) => {
         if (!data) return

@@ -6,17 +6,35 @@ import { supabase } from '../../lib/supabaseClient'
 vi.mock('../../lib/supabaseClient', () => ({ supabase: { from: vi.fn() } }))
 
 describe('DailyQueue', () => {
-  it('lists urgent patients before routine ones', async () => {
+  it('lists urgent patients before routine ones, scoped to the given day and active statuses', async () => {
+    const gteSpy = vi.fn()
+    const lteSpy = vi.fn()
+    const inSpy = vi.fn()
     ;(supabase.from as any).mockReturnValue({
       select: () => ({
         eq: () => ({
-          order: () => Promise.resolve({
-            data: [
-              { id: 'a1', scheduled_at: '2026-09-28T09:00:00Z', urgency_level: 'routine', patients: { profiles: { full_name: 'Alice' } } },
-              { id: 'a2', scheduled_at: '2026-09-28T09:30:00Z', urgency_level: 'urgent', patients: { profiles: { full_name: 'Bob' } } },
-            ],
-            error: null,
-          }),
+          gte: (...args: unknown[]) => {
+            gteSpy(...args)
+            return {
+              lte: (...lteArgs: unknown[]) => {
+                lteSpy(...lteArgs)
+                return {
+                  in: (...inArgs: unknown[]) => {
+                    inSpy(...inArgs)
+                    return {
+                      order: () => Promise.resolve({
+                        data: [
+                          { id: 'a1', scheduled_at: '2026-09-28T09:00:00Z', urgency_level: 'routine', patients: { profiles: { full_name: 'Alice' } } },
+                          { id: 'a2', scheduled_at: '2026-09-28T09:30:00Z', urgency_level: 'urgent', patients: { profiles: { full_name: 'Bob' } } },
+                        ],
+                        error: null,
+                      }),
+                    }
+                  },
+                }
+              },
+            }
+          },
         }),
       }),
     })
@@ -25,5 +43,11 @@ describe('DailyQueue', () => {
       const names = screen.getAllByTestId('patient-name').map((n) => n.textContent)
       expect(names).toEqual(['Bob', 'Alice'])
     })
+    // Without these, the queue would show every appointment the doctor has
+    // ever had, including past/cancelled/completed ones — not just today's
+    // active ones.
+    expect(gteSpy).toHaveBeenCalledWith('scheduled_at', '2026-09-28T00:00:00Z')
+    expect(lteSpy).toHaveBeenCalledWith('scheduled_at', '2026-09-28T23:59:59Z')
+    expect(inSpy).toHaveBeenCalledWith('status', ['booked', 'checked_in', 'in_progress'])
   })
 })

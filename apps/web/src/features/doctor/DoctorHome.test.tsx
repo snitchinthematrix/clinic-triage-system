@@ -8,7 +8,11 @@ vi.mock('../../lib/supabaseClient', () => ({ supabase: { from: vi.fn() } }))
 describe('DoctorHome', () => {
   it("renders the doctor's daily queue and availability editor", () => {
     ;(supabase.from as any).mockReturnValue({
-      select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+      select: () => ({
+        eq: () => ({
+          gte: () => ({ lte: () => ({ in: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }) }),
+        }),
+      }),
       update: () => ({ eq: vi.fn().mockResolvedValue({ error: null }) }),
     })
     render(<DoctorHome doctorId="doc-1" />)
