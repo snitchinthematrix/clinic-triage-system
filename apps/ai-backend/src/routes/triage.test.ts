@@ -40,6 +40,25 @@ describe('POST /triage', () => {
     expect(res.body.disclaimer).toMatch(/call the clinic/i)
   })
 
+  it('treats a malformed or differently-cased urgency string from Gemini as unknown, not pass-through', async () => {
+    vi.spyOn(geminiClient, 'callGemini').mockResolvedValue({
+      urgency: 'Emergency', suggestedDepartment: 'Emergency',
+    })
+    const res = await request(app).post('/triage').set('Authorization', testBearerToken()).send({
+      symptomText: 'chest pain', durationDays: 0, bodyArea: 'chest', severity: 8,
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.urgency).toBe('unknown')
+  })
+
+  it('returns 500 (not a hang) when callGemini throws something other than GeminiUnavailableError', async () => {
+    vi.spyOn(geminiClient, 'callGemini').mockRejectedValue(new Error('unexpected bug'))
+    const res = await request(app).post('/triage').set('Authorization', testBearerToken()).send({
+      symptomText: 'sore throat', durationDays: 1, bodyArea: 'throat', severity: 2,
+    })
+    expect(res.status).toBe(500)
+  })
+
   it('rejects requests missing required fields', async () => {
     const res = await request(app).post('/triage').set('Authorization', testBearerToken()).send({ symptomText: '' })
     expect(res.status).toBe(400)

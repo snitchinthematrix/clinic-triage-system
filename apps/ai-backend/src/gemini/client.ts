@@ -31,7 +31,12 @@ export async function callGemini(prompt: string, _schema: object): Promise<Recor
     throw new GeminiUnavailableError(`Gemini returned status ${response.status}`)
   }
 
-  const body = await response.json()
+  let body: any
+  try {
+    body = await response.json()
+  } catch {
+    throw new GeminiUnavailableError('Gemini response body was not valid JSON')
+  }
   const text = body.candidates?.[0]?.content?.parts?.[0]?.text
   if (!text) throw new GeminiUnavailableError('Gemini response had no content')
 

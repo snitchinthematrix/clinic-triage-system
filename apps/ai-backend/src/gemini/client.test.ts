@@ -26,4 +26,14 @@ describe('callGemini', () => {
     ;(fetch as any).mockRejectedValue(new Error('network down'))
     await expect(callGemini('some prompt', {})).rejects.toBeInstanceOf(GeminiUnavailableError)
   })
+
+  it('throws GeminiUnavailableError (not a raw parse error) when the response body is not valid JSON', async () => {
+    ;(fetch as any).mockResolvedValue({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError('Unexpected token')
+      },
+    })
+    await expect(callGemini('some prompt', {})).rejects.toBeInstanceOf(GeminiUnavailableError)
+  })
 })

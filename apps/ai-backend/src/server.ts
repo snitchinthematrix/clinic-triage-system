@@ -24,6 +24,17 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' })
 })
 
+// Catches errors forwarded via asyncHandler (Express 4 can't catch a
+// rejected async-handler promise on its own) and responds with JSON
+// consistent with the rest of this API, instead of Express's default HTML
+// error page. Must be registered last and take all four parameters —
+// Express identifies error-handling middleware by arity.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(err)
+  res.status(500).json({ error: 'Internal server error' })
+})
+
 if (require.main === module) {
   const port = process.env.PORT ?? 4000
   app.listen(port, () => console.log(`AI backend listening on ${port}`))
