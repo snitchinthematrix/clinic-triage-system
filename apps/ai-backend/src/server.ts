@@ -1,9 +1,12 @@
 import express from 'express'
+import cors from 'cors'
 import { triageRouter } from './routes/triage'
 import { summarizeRouter } from './routes/summarize'
 import { notifyRouter } from './routes/notify'
 
 export const app = express()
+const allowedOrigin = process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173'
+app.use(cors({ origin: allowedOrigin }))
 app.use(express.json())
 app.use(triageRouter)
 app.use(summarizeRouter)

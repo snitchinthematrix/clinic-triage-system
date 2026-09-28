@@ -9,3 +9,13 @@ describe('GET /health', () => {
     expect(res.body).toEqual({ status: 'ok' })
   })
 })
+
+describe('CORS', () => {
+  it('allows cross-origin requests from the configured frontend origin', async () => {
+    const res = await request(app)
+      .options('/health')
+      .set('Origin', 'http://localhost:5173')
+      .set('Access-Control-Request-Method', 'GET')
+    expect(res.headers['access-control-allow-origin']).toBeDefined()
+  })
+})
