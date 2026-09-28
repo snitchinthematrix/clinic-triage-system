@@ -3,6 +3,7 @@ services:
     name: clinic-ai-backend
     env: node
     plan: free
+    rootDir: apps/ai-backend
     buildCommand: npm install && npm run build
     startCommand: node dist/server.js
     envVars:
