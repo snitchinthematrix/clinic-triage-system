@@ -8,17 +8,26 @@ export function TriageForm({ onComplete }: { onComplete: (result: TriageResult) 
   const [severity, setSeverity] = useState(1)
   const [emergency, setEmergency] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setSubmitting(true)
-    const result = await submitTriage({ symptomText, bodyArea, durationDays, severity })
-    setSubmitting(false)
-    if (result.urgency === 'emergency') {
-      setEmergency(true)
-      return
+    setSubmitError(null)
+    try {
+      const result = await submitTriage({ symptomText, bodyArea, durationDays, severity })
+      if (result.urgency === 'emergency') {
+        setEmergency(true)
+        return
+      }
+      onComplete(result)
+    } catch {
+      setSubmitError(
+        'We could not reach the clinic to assess your symptoms right now. Please call the clinic directly, or call emergency services if this is urgent.'
+      )
+    } finally {
+      setSubmitting(false)
     }
-    onComplete(result)
   }
 
   if (emergency) {
@@ -60,6 +69,7 @@ export function TriageForm({ onComplete }: { onComplete: (result: TriageResult) 
         />
       </label>
       <button type="submit" disabled={submitting}>Submit</button>
+      {submitError && <p role="alert">{submitError}</p>}
     </form>
   )
 }

@@ -33,4 +33,17 @@ describe('TriageForm', () => {
       expect.objectContaining({ urgency: 'routine' })
     ))
   })
+
+  it('shows a fallback message and re-enables the form when the triage request itself fails (network/CORS/5xx)', async () => {
+    vi.spyOn(client, 'submitTriage').mockRejectedValue(new Error('Triage request failed'))
+    render(<TriageForm onComplete={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText(/describe your symptoms/i), { target: { value: 'sore throat' } })
+    fireEvent.change(screen.getByLabelText(/severity/i), { target: { value: '2' } })
+    fireEvent.click(screen.getByText(/submit/i))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/call the clinic/i)
+    })
+    expect((screen.getByText(/submit/i) as HTMLButtonElement).disabled).toBe(false)
+  })
 })
